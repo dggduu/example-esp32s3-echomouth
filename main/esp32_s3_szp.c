@@ -214,9 +214,7 @@ esp_err_t bsp_display_new(void) {
       .lcd_param_bits = LCD_PARAM_BITS,
       .spi_mode = 2,
       .trans_queue_depth = 10,
-      .flags = {
-          .lsb_first = 1,
-      }};
+  };
   ESP_GOTO_ON_ERROR(
       esp_lcd_new_panel_io_spi((esp_lcd_spi_bus_handle_t)BSP_LCD_SPI_NUM,
                                &io_config, &io_handle),
@@ -354,6 +352,9 @@ void bsp_lvgl_start(void) {
 
   /* 初始化液晶屏 并添加LVGL接口 */
   disp = bsp_display_lcd_init();
+
+  // 软件翻转端序
+  lv_display_set_color_format(disp, LV_COLOR_FORMAT_RGB565_SWAPPED);
 
   /* 初始化触摸屏 并添加LVGL接口 */
   disp_indev = bsp_display_indev_init(disp);
