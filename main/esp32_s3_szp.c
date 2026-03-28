@@ -214,7 +214,9 @@ esp_err_t bsp_display_new(void) {
       .lcd_param_bits = LCD_PARAM_BITS,
       .spi_mode = 2,
       .trans_queue_depth = 10,
-  };
+      .flags = {
+          .lsb_first = 1,
+      }};
   ESP_GOTO_ON_ERROR(
       esp_lcd_new_panel_io_spi((esp_lcd_spi_bus_handle_t)BSP_LCD_SPI_NUM,
                                &io_config, &io_handle),
