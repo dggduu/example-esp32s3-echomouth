@@ -1,0 +1,26 @@
+idf_component_register(
+    SRCS
+        ${CMAKE_CURRENT_LIST_DIR}/Core/gs_nav.c
+        ${CMAKE_CURRENT_LIST_DIR}/Core/gs_watch_nav.c
+        ${CMAKE_CURRENT_LIST_DIR}/Core/watch_lock_nav.c
+        ${CMAKE_CURRENT_LIST_DIR}/Components/chat_comp.c
+        ${CMAKE_CURRENT_LIST_DIR}/Components/gs_qrcode_comp.c
+        ${CMAKE_CURRENT_LIST_DIR}/Components/gs_portal.c
+        ${CMAKE_CURRENT_LIST_DIR}/Fonts/chinese_font_14px.c
+        ${CMAKE_CURRENT_LIST_DIR}/Styles/my_theme.c
+        ${CMAKE_CURRENT_LIST_DIR}/Utils/chat_fifo.c
+        ${CMAKE_CURRENT_LIST_DIR}/Utils/net_adapter.c
+        ${CMAKE_CURRENT_LIST_DIR}/Utils/protocol.c
+        ${CMAKE_CURRENT_LIST_DIR}/Services/chat_service.c
+    INCLUDE_DIRS
+        "."
+        "Core"
+        "Components"
+        "Services"
+        "Utils"
+        "Fonts"
+        "Styles"
+    REQUIRES
+        lvgl
+        AHEasing
+)
