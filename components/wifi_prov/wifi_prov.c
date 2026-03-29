@@ -12,6 +12,9 @@
 #include <wifi_provisioning/manager.h>
 #include <wifi_provisioning/scheme_ble.h>
 
+#include "cJSON.h"
+#include "nvs_flash.h"
+
 #include "prov_qr.h"
 #include "prov_sec2_gen.h"
 #include "wifi_prov.h"
@@ -147,26 +150,66 @@ static void get_device_service_name(char *service_name, size_t max) {
            eth_mac[4], eth_mac[5]);
 }
 
-// 自定义消息处理回调
+// 接收家长端的数据
 esp_err_t custom_prov_data_handler(uint32_t session_id, const uint8_t *inbuf,
                                    ssize_t inlen, uint8_t **outbuf,
                                    ssize_t *outlen, void *priv_data) {
-  if (inbuf) {
-    ESP_LOGI(TAG, "Received data: %.*s", inlen, (char *)inbuf);
-  }
+  esp_err_t ret = ESP_OK;
   const char *response = "SUCCESS";
-  // 检查接收到的数据是否为 "helloworld"
-  if (inbuf && inlen == strlen("helloworld") &&
-      memcmp(inbuf, "helloworld", inlen) == 0) {
 
-    response = "helloworld";
+  if (inbuf && inlen > 0) {
+    ESP_LOGI(TAG, "Received data: %.*s", inlen, (char *)inbuf);
+
+    // 解析 JSON
+    cJSON *root = cJSON_Parse((const char *)inbuf);
+    if (root == NULL) {
+      ESP_LOGE(TAG, "JSON parse error");
+      response = "FAILED";
+    } else {
+      cJSON *deviceId_obj = cJSON_GetObjectItem(root, "dId");
+      cJSON *parentId_obj = cJSON_GetObjectItem(root, "pId");
+
+      if (deviceId_obj && cJSON_IsString(deviceId_obj) && parentId_obj &&
+          cJSON_IsString(parentId_obj)) {
+
+        const char *device_id = deviceId_obj->valuestring;
+        const char *parent_id = parentId_obj->valuestring;
+
+        ESP_LOGI(TAG, "deviceId: %s, parentId: %s", device_id, parent_id);
+
+        // 存储到 NVS
+        nvs_handle_t nvs_handle;
+        ret = nvs_open("storage", NVS_READWRITE, &nvs_handle);
+        if (ret == ESP_OK) {
+          ret = nvs_set_str(nvs_handle, "device_id", device_id);
+          if (ret != ESP_OK)
+            ESP_LOGE(TAG, "Failed to set device_id: %s", esp_err_to_name(ret));
+          ret = nvs_set_str(nvs_handle, "parent_id", parent_id);
+          if (ret != ESP_OK)
+            ESP_LOGE(TAG, "Failed to set parent_id: %s", esp_err_to_name(ret));
+          nvs_commit(nvs_handle);
+          nvs_close(nvs_handle);
+        } else {
+          ESP_LOGE(TAG, "Failed to open NVS: %s", esp_err_to_name(ret));
+          response = "FAILED";
+        }
+      } else {
+        ESP_LOGE(TAG, "Missing or invalid deviceId/parentId");
+        response = "FAILED";
+      }
+      cJSON_Delete(root);
+    }
+  } else {
+    ESP_LOGW(TAG, "Empty data received");
+    response = "FAILED";
   }
+
   *outbuf = (uint8_t *)strdup(response);
   if (*outbuf == NULL) {
     ESP_LOGE(TAG, "System out of memory");
     return ESP_ERR_NO_MEM;
   }
-  *outlen = strlen(response) + 1; /* +1 for NULL terminating byte */
+  *outlen = strlen(response) + 1;
   return ESP_OK;
 }
 
