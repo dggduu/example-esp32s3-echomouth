@@ -27,6 +27,8 @@
 #include "esp_vfs_fat.h"
 #include "sdmmc_cmd.h"
 
+#include "esp_lv_adapter.h"
+
 #include "esp_littlefs.h"
 
 /******************************************************************************/
@@ -108,10 +110,12 @@ esp_err_t bsp_display_brightness_set(int brightness_percent);
 esp_err_t bsp_display_backlight_off(void);
 esp_err_t bsp_display_backlight_on(void);
 esp_err_t bsp_lcd_init(void);
+
 void lcd_set_color(uint16_t color);
 void lcd_draw_pictrue(int x_start, int y_start, int x_end, int y_end,
                       const unsigned char *gImage);
 void bsp_lvgl_start(void);
+void bsp_lvgl_start_with_adapter(void);
 /***************    LCD显示屏 ↑   *************************/
 /***********************************************************/
 
