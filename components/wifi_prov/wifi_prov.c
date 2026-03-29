@@ -154,14 +154,19 @@ esp_err_t custom_prov_data_handler(uint32_t session_id, const uint8_t *inbuf,
   if (inbuf) {
     ESP_LOGI(TAG, "Received data: %.*s", inlen, (char *)inbuf);
   }
-  char response[] = "SUCCESS";
+  const char *response = "SUCCESS";
+  // 检查接收到的数据是否为 "helloworld"
+  if (inbuf && inlen == strlen("helloworld") &&
+      memcmp(inbuf, "helloworld", inlen) == 0) {
+
+    response = "helloworld";
+  }
   *outbuf = (uint8_t *)strdup(response);
   if (*outbuf == NULL) {
     ESP_LOGE(TAG, "System out of memory");
     return ESP_ERR_NO_MEM;
   }
   *outlen = strlen(response) + 1; /* +1 for NULL terminating byte */
-
   return ESP_OK;
 }
 
@@ -206,104 +211,6 @@ void wifi_prov_nvs_init() {
   /* Initialize TCP/IP */
   ESP_ERROR_CHECK(esp_netif_init());
 }
-// 重试连接次数
-
-// esp_err_t wifi_prov_init() {
-//   ESP_ERROR_CHECK(esp_event_loop_create_default());
-//   wifi_event_group = xEventGroupCreate();
-//   ESP_ERROR_CHECK(esp_event_handler_register(WIFI_PROV_EVENT,
-//   ESP_EVENT_ANY_ID,
-//                                              &event_handler, NULL));
-//   ESP_ERROR_CHECK(esp_event_handler_register(
-//       PROTOCOMM_TRANSPORT_BLE_EVENT, ESP_EVENT_ANY_ID, &event_handler,
-//       NULL));
-//   ESP_ERROR_CHECK(esp_event_handler_register(PROTOCOMM_SECURITY_SESSION_EVENT,
-//                                              ESP_EVENT_ANY_ID,
-//                                              &event_handler, NULL));
-//   ESP_ERROR_CHECK(esp_event_handler_register(IP_EVENT, IP_EVENT_STA_GOT_IP,
-//                                              &event_handler, NULL));
-//   esp_netif_create_default_wifi_sta();
-//   wifi_init_config_t cfg = WIFI_INIT_CONFIG_DEFAULT();
-//   ESP_ERROR_CHECK(esp_wifi_init(&cfg));
-
-//   wifi_prov_mgr_config_t config = {
-//       .wifi_prov_conn_cfg =
-//           {
-//               .wifi_conn_attempts = CONFIG_PROV_MGR_CONNECTION_CNT,
-//           },
-//       .scheme = wifi_prov_scheme_ble,
-//       .app_event_handler = wifi_prov_event_handler,
-//       // 自定义销毁回调
-//       .scheme_event_handler = WIFI_PROV_SCHEME_BLE_EVENT_HANDLER_FREE_BTDM};
-
-//   //  prov 初始化
-//   ESP_ERROR_CHECK(wifi_prov_mgr_init(config));
-
-//   bool provisioned = false;
-//   // 检测之前是否已经配网
-//   ESP_ERROR_CHECK(wifi_prov_mgr_is_provisioned(&provisioned));
-
-//   if (!provisioned) {
-//     ESP_LOGI(TAG, "Starting provisioning");
-
-//     // 自定义设备名称
-//     char service_name[12];
-//     get_device_service_name(service_name, sizeof(service_name));
-
-//     wifi_prov_security_t security = WIFI_PROV_SECURITY_2;
-
-//     const char *username = EXAMPLE_PROV_SEC2_USERNAME;
-//     const char *pop = EXAMPLE_PROV_SEC2_PWD;
-
-//     wifi_prov_security2_params_t sec2_params = {};
-
-//     ESP_ERROR_CHECK(
-//         example_get_sec2_salt(&sec2_params.salt, &sec2_params.salt_len));
-//     ESP_ERROR_CHECK(example_get_sec2_verifier(&sec2_params.verifier,
-//                                               &sec2_params.verifier_len));
-
-//     wifi_prov_security2_params_t *sec_params = &sec2_params;
-//     // BLE模式下不用管这个
-//     const char *service_key = NULL;
-
-//     // 自定义 uuid
-//     uint8_t custom_service_uuid[] = {
-//         /* LSB <---------------------------------------
-//          * ---------------------------------------> MSB */
-//         0xb4, 0xdf, 0x5a, 0x1c, 0x3f, 0x6b, 0xf4, 0xbf,
-//         0xea, 0x4a, 0x82, 0x03, 0x04, 0x90, 0x1a, 0x02,
-//     };
-
-//     wifi_prov_scheme_ble_set_service_uuid(custom_service_uuid);
-
-//     // 用户态携带的附加数据
-//     wifi_prov_mgr_endpoint_create("custom-data");
-
-//     ESP_ERROR_CHECK(wifi_prov_mgr_start_provisioning(
-//         security, (const void *)sec_params, service_name, service_key));
-
-//     //  绑定用户态回调
-//     wifi_prov_mgr_endpoint_register("custom-data", custom_prov_data_handler,
-//                                     NULL);
-
-//     // 调用显示QR码
-//     wifi_prov_print_qr(service_name, username, pop, PROV_TRANSPORT_BLE);
-//   } else {
-//     ESP_LOGI(TAG, "Already provisioned, starting Wi-Fi STA");
-//     wifi_prov_mgr_deinit();
-
-//     ESP_ERROR_CHECK(esp_event_handler_register(WIFI_EVENT, ESP_EVENT_ANY_ID,
-//                                                &event_handler, NULL));
-//     /* Start Wi-Fi station */
-//     wifi_init_sta();
-//   }
-
-//   /* Wait for Wi-Fi connection */
-//   xEventGroupWaitBits(wifi_event_group, WIFI_CONNECTED_EVENT, true, true,
-//                       portMAX_DELAY);
-
-//   return ESP_OK;
-// }
 
 static void provisioning_task(void *arg) {
   // 检测是否已配网
@@ -337,12 +244,13 @@ static void provisioning_task(void *arg) {
 
     // 创建自定义 endpoint
     wifi_prov_mgr_endpoint_create("custom-data");
-    wifi_prov_mgr_endpoint_register("custom-data", custom_prov_data_handler,
-                                    NULL);
 
     // 启动 provisioning
     ESP_ERROR_CHECK(wifi_prov_mgr_start_provisioning(
         security, (const void *)&sec2_params, service_name, NULL));
+
+    wifi_prov_mgr_endpoint_register("custom-data", custom_prov_data_handler,
+                                    NULL);
 
     // 异步显示二维码
     wifi_prov_print_qr(service_name, username, pop, PROV_TRANSPORT_BLE);

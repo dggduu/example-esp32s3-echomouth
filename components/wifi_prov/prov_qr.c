@@ -175,7 +175,7 @@ void wifi_prov_print_qr(const char *name, const char *username, const char *pop,
   }
 }
 
-// 更新二维码状态（同步）
+// 更新二维码状态
 void prov_qr_set_status(gs_qr_status_t status) {
   if (s_qr_page_active) {
     gs_qrcode_comp_trigger(status);
