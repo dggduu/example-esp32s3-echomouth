@@ -116,11 +116,5 @@ void app_main(void) {
   bsp_littlefs_mount(); // SPIFFS文件系统初始化
   bsp_codec_init();     // 音频初始化
 
-  // if (esp_lv_adapter_lock(-1) == ESP_OK) {
-  //   test_gs_nav();
-  //   esp_lv_adapter_unlock();
-  // }
-
   test_gs_nav();
-  // ESP_ERROR_CHECK(esp_lv_adapter_start());
 }

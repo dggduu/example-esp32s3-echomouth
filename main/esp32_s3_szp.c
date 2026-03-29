@@ -303,7 +303,7 @@ static lv_disp_t *bsp_display_lcd_init_with_adapter(void) {
 
   esp_lv_adapter_display_config_t disp_cfg =
       ESP_LV_ADAPTER_DISPLAY_SPI_WITHOUT_PSRAM_DEFAULT_CONFIG(
-          panel_handle, io_handle, BSP_LCD_H_RES, BSP_LCD_H_RES,
+          panel_handle, io_handle, BSP_LCD_H_RES, BSP_LCD_V_RES,
           ESP_LV_ADAPTER_ROTATE_0);
 
   // disp_cfg.profile.require_double_buffer = false;
@@ -362,6 +362,18 @@ static lv_indev_t *bsp_display_indev_init(lv_disp_t *disp) {
   return lvgl_port_add_touch(&touch_cfg);
 }
 
+// 触摸屏初始化+添加LVGL接口
+static lv_indev_t *bsp_display_indev_init_with_adapter(lv_disp_t *disp) {
+  /* 初始化触摸屏 */
+  ESP_ERROR_CHECK(bsp_touch_new(&tp));
+  assert(tp);
+
+  esp_lv_adapter_touch_config_t touch_cfg =
+      ESP_LV_ADAPTER_TOUCH_DEFAULT_CONFIG(disp, tp);
+
+  return esp_lv_adapter_register_touch(&touch_cfg);
+}
+
 // 开发板显示初始化
 void bsp_lvgl_start(void) {
   /* 初始化LVGL */
@@ -390,10 +402,10 @@ void bsp_lvgl_start_with_adapter(void) {
   disp = bsp_display_lcd_init_with_adapter();
 
   // 软件翻转端序
-  lv_display_set_color_format(disp, LV_COLOR_FORMAT_RGB565_SWAPPED);
+  // lv_display_set_color_format(disp, LV_COLOR_FORMAT_RGB565_SWAPPED);
 
   /* 初始化触摸屏 并添加LVGL接口 */
-  disp_indev = bsp_display_indev_init(disp);
+  disp_indev = bsp_display_indev_init_with_adapter(disp);
 
   // 启动 lv_adapter 任务
 
