@@ -25,7 +25,7 @@ lv_obj_t *gs_qrcode_comp_create(lv_obj_t *parent, const gs_qr_config_t *cfg) {
   lv_obj_set_style_pad_all(s_comp.root, 0, 0);
 
   s_comp.qr_obj = lv_qrcode_create(s_comp.root);
-  lv_qrcode_set_size(s_comp.qr_obj, 120);
+  lv_qrcode_set_size(s_comp.qr_obj, 150);
   lv_qrcode_update(s_comp.qr_obj, cfg->qr_data, strlen(cfg->qr_data));
   lv_obj_align(s_comp.qr_obj, LV_ALIGN_CENTER, 0, -20);
 
