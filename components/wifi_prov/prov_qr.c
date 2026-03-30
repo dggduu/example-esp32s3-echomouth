@@ -18,7 +18,7 @@ typedef struct {
 } qr_display_req_t;
 
 // 静态队列句柄
-static QueueHandle_t s_qr_queue = NULL;
+QueueHandle_t s_qr_queue = NULL;
 static bool s_qr_page_active = false;
 
 // 页面私有上下文
@@ -33,13 +33,13 @@ static void on_qr_status_changed(lv_obj_t *root, lv_obj_t *label,
                                  gs_qr_status_t status) {
   switch (status) {
   case GS_QR_WAITED:
-    lv_label_set_text(label, "Waiting for scan...");
+    lv_label_set_text(label, "等待扫描中...");
     break;
   case GS_QR_SUCCESS:
-    lv_label_set_text(label, "Provisioning successful!");
+    lv_label_set_text(label, "配网成功!");
     break;
   case GS_QR_FAILED:
-    lv_label_set_text(label, "Provisioning failed!");
+    lv_label_set_text(label, "配网失败!");
     break;
   }
 }

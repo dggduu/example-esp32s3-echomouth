@@ -15,6 +15,8 @@
 #include "cJSON.h"
 #include "nvs_flash.h"
 
+#include "gs_nav.h"
+
 #include "prov_qr.h"
 #include "prov_sec2_gen.h"
 #include "wifi_prov.h"
@@ -239,14 +241,52 @@ void wifi_prov_reset_state() {
 }
 
 void wifi_prov_nvs_init() {
+  /* Initialize NVS partition */
   esp_err_t ret = nvs_flash_init();
   if (ret == ESP_ERR_NVS_NO_FREE_PAGES ||
       ret == ESP_ERR_NVS_NEW_VERSION_FOUND) {
+    /* NVS partition was truncated
+     * and needs to be erased */
     ESP_ERROR_CHECK(nvs_flash_erase());
 
+    /* Retry nvs_flash_init */
     ESP_ERROR_CHECK(nvs_flash_init());
   }
+
+  /* Initialize TCP/IP */
   ESP_ERROR_CHECK(esp_netif_init());
+}
+
+#define PROV_RENDER_STOP_BIT BIT1
+
+// 定义在头文件或全局中
+#define PROV_FINISH_BIT BIT0
+
+extern QueueHandle_t s_qr_queue;
+
+void qr_render_task(void *arg) {
+  prov_qr_init();
+  ESP_LOGI(TAG, "QR Task started");
+
+  while (1) {
+    prov_qr_process();
+
+    EventBits_t bits = xEventGroupGetBits(wifi_event_group);
+    if (bits & PROV_FINISH_BIT) {
+      ESP_LOGI(TAG, "QR Task received exit signal");
+      break;
+    }
+
+    vTaskDelay(pdMS_TO_TICKS(20));
+  }
+
+  gs_nav_pop();
+
+  vQueueDelete(s_qr_queue);
+  s_qr_queue = NULL;
+
+  ESP_LOGI(TAG, "QR Task self-deleting");
+  vTaskDelete(NULL);
 }
 
 static void provisioning_task(void *arg) {
@@ -257,6 +297,8 @@ static void provisioning_task(void *arg) {
   if (!provisioned) {
     ESP_LOGI(TAG, "Starting provisioning");
 
+    xEventGroupClearBits(wifi_event_group, PROV_RENDER_STOP_BIT);
+    xTaskCreate(qr_render_task, "qr_render", 4096, NULL, 4, NULL);
     // 生成设备名称
     char service_name[12];
     get_device_service_name(service_name, sizeof(service_name));
@@ -291,6 +333,12 @@ static void provisioning_task(void *arg) {
 
     // 异步显示二维码
     wifi_prov_print_qr(service_name, username, pop, PROV_TRANSPORT_BLE);
+
+    xEventGroupWaitBits(wifi_event_group, WIFI_CONNECTED_EVENT, true, true,
+                        portMAX_DELAY);
+
+    xEventGroupSetBits(wifi_event_group, PROV_RENDER_STOP_BIT);
+
   } else {
     ESP_LOGI(TAG, "Already provisioned, starting Wi-Fi STA");
     wifi_prov_mgr_deinit();
@@ -298,12 +346,10 @@ static void provisioning_task(void *arg) {
     ESP_ERROR_CHECK(esp_event_handler_register(WIFI_EVENT, ESP_EVENT_ANY_ID,
                                                &event_handler, NULL));
     wifi_init_sta();
+    xEventGroupWaitBits(wifi_event_group, WIFI_CONNECTED_EVENT, true, true,
+                        portMAX_DELAY);
   }
-
-  // 等待 Wi-Fi 连接
-  xEventGroupWaitBits(wifi_event_group, WIFI_CONNECTED_EVENT, true, true,
-                      portMAX_DELAY);
-
+  ESP_LOGI(TAG, "Provisioning task completed");
   // 任务结束，自行删除
   vTaskDelete(NULL);
 }

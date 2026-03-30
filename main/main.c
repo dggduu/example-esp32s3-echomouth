@@ -1,7 +1,7 @@
 #include "esp32_s3_szp.h"
-#include "gs_nav.h"
-#include "sntp_helper.h"
 #include <stdio.h>
+
+#include "gs_nav.h"
 
 #include "wifi_prov.h"
 
@@ -103,45 +103,10 @@ const gs_page_desc_t page_b_desc = {
 
 #include "prov_qr.h"
 
-void lvgl_task(void *arg) {
-  prov_qr_init();
-  while (1) {
-    prov_qr_process();
-    vTaskDelay(pdMS_TO_TICKS(25));
-  }
-}
-
 static void test_gs_nav(void) {
   lv_obj_t *container = lv_scr_act();
   gs_nav_init(container);
-  wifi_prov_nvs_init();
-
-  xTaskCreate(lvgl_task, "lvgl", 4096, NULL, 4, NULL);
   wifi_prov_init();
-
-  vTaskDelay(pdMS_TO_TICKS(10000));
-
-  sntp_helper_init();
-
-  // 设置时区为中国标准时间
-  sntp_helper_set_timezone("CST-8");
-
-  // 同步时间（阻塞 10 秒）
-  if (sntp_helper_time("pool.ntp.org", 10000) == ESP_OK) {
-    // 获取当前毫秒时间戳
-    uint64_t now_ms = sntp_helper_get_timestamp_ms();
-    ESP_LOGI("main", "Current timestamp (ms): %llu", now_ms);
-
-    // 获取本地时间字符串
-    time_t now_s = now_ms / 1000;
-    struct tm tm_info;
-    localtime_r(&now_s, &tm_info);
-    char buf[64];
-    strftime(buf, sizeof(buf), "%Y-%m-%d %H:%M:%S", &tm_info);
-    ESP_LOGI("main", "Local time: %s", buf);
-  } else {
-    ESP_LOGE("main", "Time sync failed");
-  }
 }
 
 void app_main(void) {

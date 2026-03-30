@@ -12,10 +12,8 @@
 
 static const char *TAG = "socket_prov";
 
-static int g_sock = -1; // global socket descriptor
+static int g_sock = -1;
 static SemaphoreHandle_t g_mutex = NULL;
-
-// Internal helper to set socket non-blocking? Not necessary, but can be added.
 
 int socket_prov_init(void) {
   if (g_mutex != NULL) {

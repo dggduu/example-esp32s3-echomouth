@@ -1,120 +1,96 @@
-#include "gs_watch_nav.h"
-#include <string.h>
+#include "esp_log.h"
+#include "watch_lock_nav.h"
 
-/* 内部上下文，保存配置和回调 */
+
+static const char *TAG = "watch_nav";
+
 typedef struct {
-  watch_nav_config_t config;
-  watch_nav_render_cb render_fn;
-  uint32_t total_pages; // 实际创建的总页面数（loop 时多两个副本）
-} nav_context_t;
+  gs_view_cb main_hook;
+  unlock_config_t config;
+  lv_obj_t *lock_screen_obj;
+  lv_obj_t *main_screen_obj;
+} lock_ctx_t;
 
-/* 滚动事件回调（处理无限循环边界） */
-static void on_scroll_event(lv_event_t *e) {
-  lv_obj_t *cont = lv_event_get_target(e);
-  nav_context_t *ctx = (nav_context_t *)lv_obj_get_user_data(cont);
-  if (!ctx || !ctx->config.loop_enable)
+static lock_ctx_t s_ctx = {0};
+
+static void anim_ready_cb(lv_anim_t *a) {
+  lv_obj_t *obj = (lv_obj_t *)lv_anim_get_user_data(a);
+  if (obj)
+    lv_obj_del(obj);
+  s_ctx.lock_screen_obj = NULL;
+}
+
+static void execute_unlock_animation(lock_ctx_t *ctx) {
+  if (!ctx->lock_screen_obj)
     return;
 
-  int32_t scroll_y = lv_obj_get_scroll_y(cont);
-  int32_t page_h = ctx->config.height;
-  uint32_t total = ctx->config.item_count;
+  lv_obj_remove_flag(ctx->lock_screen_obj, LV_OBJ_FLAG_CLICKABLE);
 
-  if (scroll_y <= 0) {
-    // 滚动到顶部边界，跳转到对应副本位置
-    lv_obj_scroll_to_y(cont, total * page_h, LV_ANIM_OFF);
-  } else if (scroll_y >= (total + 1) * page_h) {
-    // 滚动到底部边界，跳转到对应副本位置
-    lv_obj_scroll_to_y(cont, page_h, LV_ANIM_OFF);
+  lv_anim_t a;
+  lv_anim_init(&a);
+  lv_anim_set_var(&a, ctx->lock_screen_obj);
+  // LVGL 9 使用 lv_display_get_vertical_resolution(NULL)
+  int32_t screen_h = lv_display_get_vertical_resolution(NULL);
+  lv_anim_set_values(&a, 0, -screen_h);
+  lv_anim_set_duration(&a, 400); // 9.x 中使用 duration
+  lv_anim_set_exec_cb(&a, (lv_anim_exec_xcb_t)lv_obj_set_y);
+  lv_anim_set_path_cb(&a, lv_anim_path_ease_out);
+  lv_anim_set_completed_cb(&a, anim_ready_cb); // 9.x 建议用 completed_cb
+  lv_anim_set_user_data(&a, ctx->lock_screen_obj);
+  lv_anim_start(&a);
+}
+
+static void lock_event_cb(lv_event_t *e) {
+  lv_event_code_t code = lv_event_get_code(e);
+  if (code == LV_EVENT_GESTURE) {
+    lv_dir_t gesture = lv_indev_get_gesture_dir(lv_indev_get_act());
+    ESP_LOGI(TAG, "Gesture Triggered: %d", (int)gesture);
+
+    // 向上滑动的动作 (手指往上提)
+    if (gesture == LV_DIR_TOP) {
+      execute_unlock_animation(&s_ctx);
+    }
   }
 }
 
-lv_obj_t *watch_nav_create(lv_obj_t *parent, const watch_nav_config_t *config,
-                           watch_nav_render_cb render_fn) {
-  if (!parent || !config || config->item_count == 0)
-    return NULL;
+int watch_lock_nav_start(gs_view_cb lock_hook, gs_view_cb main_hook,
+                         const unlock_config_t *config) {
+  if (!lock_hook || !main_hook || !config)
+    return -1;
 
-  // 创建容器
-  lv_obj_t *cont = lv_obj_create(parent);
-  if (!cont)
-    return NULL;
+  // 1. 底层主界面
+  if (s_ctx.main_screen_obj)
+    lv_obj_del(s_ctx.main_screen_obj);
+  s_ctx.main_screen_obj = main_hook(lv_screen_active());
+  lv_obj_set_size(s_ctx.main_screen_obj, LV_PCT(100), LV_PCT(100));
 
-  lv_obj_set_size(cont, config->width, config->height);
-  lv_obj_set_flex_flow(cont, LV_FLEX_FLOW_COLUMN);
-  lv_obj_set_style_pad_all(cont, 0, 0);
-  lv_obj_set_style_pad_row(cont, 0, 0);
-  lv_obj_set_style_border_width(cont, 0, 0);
-  lv_obj_set_style_bg_opa(cont, LV_OPA_TRANSP, 0);
+  // 2. 顶层锁屏容器
+  if (s_ctx.lock_screen_obj)
+    lv_obj_del(s_ctx.lock_screen_obj);
 
-  // 滚动条设置
-  if (config->show_sidebar) {
-    lv_obj_set_scrollbar_mode(cont, LV_SCROLLBAR_MODE_AUTO);
-    lv_obj_set_style_anim_duration(cont, 200, LV_PART_SCROLLBAR);
-    lv_obj_set_style_width(cont, 4, LV_PART_SCROLLBAR);
-    lv_obj_set_style_bg_color(cont, lv_palette_main(LV_PALETTE_GREY),
-                              LV_PART_SCROLLBAR);
-  } else {
-    lv_obj_set_scrollbar_mode(cont, LV_SCROLLBAR_MODE_OFF);
-  }
+  // 创建一个全屏的基础容器
+  lv_obj_t *lock = lv_obj_create(lv_screen_active());
+  s_ctx.lock_screen_obj = lock;
+  s_ctx.config = *config;
 
-  lv_obj_add_flag(cont, LV_OBJ_FLAG_SCROLL_ONE);
-  lv_obj_set_scroll_snap_y(cont, config->snap);
+  lv_obj_set_size(lock, LV_PCT(100), LV_PCT(100));
+  lv_obj_set_style_bg_color(lock, lv_color_hex(0x000000), 0); // 黑色背景
+  lv_obj_set_style_border_width(lock, 0, 0);
+  lv_obj_set_style_radius(lock, 0, 0);
+  lv_obj_move_foreground(lock);
 
-  // 分配上下文并关联到容器
-  nav_context_t *ctx = (nav_context_t *)lv_malloc(sizeof(nav_context_t));
-  if (!ctx) {
-    lv_obj_del(cont);
-    return NULL;
-  }
-  memcpy(&ctx->config, config, sizeof(watch_nav_config_t));
-  ctx->render_fn = render_fn;
-  ctx->total_pages =
-      config->loop_enable ? config->item_count + 2 : config->item_count;
+  // --- LVGL 9 核心修复项 ---
+  lv_obj_remove_flag(lock, LV_OBJ_FLAG_SCROLLABLE);  // 必须禁止滚动
+  lv_obj_add_flag(lock, LV_OBJ_FLAG_CLICKABLE);      // 必须允许点击
+  lv_obj_add_flag(lock, LV_OBJ_FLAG_GESTURE_BUBBLE); // 子控件手势向上传递
 
-  lv_obj_set_user_data(cont, ctx);
+  // 强制增加触摸感应区域，防止边缘滑动失效
+  lv_obj_set_ext_click_area(lock, 20);
 
-  // 创建页面
-  int start_idx = config->loop_enable ? -1 : 0;
-  int end_idx = config->loop_enable ? (int)config->item_count
-                                    : (int)config->item_count - 1;
+  lv_obj_add_event_cb(lock, lock_event_cb, LV_EVENT_GESTURE, &s_ctx);
 
-  for (int i = start_idx; i <= end_idx; i++) {
-    uint32_t logic_idx;
-    if (i == -1)
-      logic_idx = config->item_count - 1; // 前副本
-    else if (i == (int)config->item_count)
-      logic_idx = 0; // 后副本
-    else
-      logic_idx = i;
+  // 填充用户 UI
+  lock_hook(lock);
 
-    lv_obj_t *page = lv_obj_create(cont);
-    if (!page) {
-      // 创建失败，清理已创建的对象
-      lv_obj_del(cont);
-      lv_free(ctx);
-      return NULL;
-    }
-    lv_obj_set_size(page, LV_PCT(100), LV_PCT(100));
-    lv_obj_set_style_border_width(page, 0, 0);
-    lv_obj_set_style_radius(page, 0, 0);
-    lv_obj_set_style_pad_all(page, 0, 0);
-    lv_obj_clear_flag(page, LV_OBJ_FLAG_SCROLLABLE);
-
-    if (render_fn) {
-      render_fn(page, logic_idx);
-    }
-  }
-
-  // 添加滚动事件，用于无限循环边界修正
-  if (config->loop_enable) {
-    lv_obj_add_event_cb(cont, on_scroll_event, LV_EVENT_SCROLL_END, NULL);
-  }
-
-  lv_obj_update_layout(cont);
-
-  // 初始定位到第一页（loop 模式下定位到中间副本）
-  if (config->loop_enable) {
-    lv_obj_scroll_to_y(cont, config->height, LV_ANIM_OFF);
-  }
-
-  return cont;
+  return 0;
 }
