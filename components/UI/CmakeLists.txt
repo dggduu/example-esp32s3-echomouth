@@ -13,6 +13,9 @@ idf_component_register(
         ${CMAKE_CURRENT_LIST_DIR}/Utils/net_adapter.c
         ${CMAKE_CURRENT_LIST_DIR}/Utils/protocol.c
         ${CMAKE_CURRENT_LIST_DIR}/Services/chat_service.c
+
+        ${CMAKE_CURRENT_LIST_DIR}/Pages/main_page.c
+        ${CMAKE_CURRENT_LIST_DIR}/Pages/menu_page.c
     INCLUDE_DIRS
         "."
         "Core"

@@ -40,7 +40,7 @@ static esp_err_t example_get_sec2_verifier(const char **verifier,
 }
 
 const int WIFI_CONNECTED_EVENT = BIT0;
-static EventGroupHandle_t wifi_event_group;
+EventGroupHandle_t wifi_event_group;
 
 #define PROV_QR_VERSION "v1"
 #define PROV_TRANSPORT_BLE "ble"

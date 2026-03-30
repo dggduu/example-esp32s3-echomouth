@@ -1,112 +1,63 @@
 #include "esp32_s3_szp.h"
+#include "gs_nav.h"
+#include "prov_qr.h"
+#include "sntp_helper.h"
+#include "wifi_prov.h"
+#include <esp_wifi.h>
 #include <stdio.h>
 
-#include "gs_nav.h"
+#include <freertos/FreeRTOS.h>
+#include <freertos/event_groups.h>
+#include <freertos/task.h>
 
-#include "wifi_prov.h"
+extern EventGroupHandle_t wifi_event_group;
+extern const int WIFI_CONNECTED_EVENT;
 
-typedef struct {
-  int dummy;
-} page_a_ctx_t;
-
-typedef struct {
-  int counter;
-} page_b_ctx_t;
-
-/* 前向声明页面描述符，因为回调中需要用到 */
-extern const gs_page_desc_t page_a_desc;
-extern const gs_page_desc_t page_b_desc;
-
-/* 页面 A 的事件回调*/
-static void page_a_btn_event_cb(lv_event_t *e) {
-  gs_nav_push(&page_b_desc, NULL);
-}
-
-static void *page_a_init(void *args) {
-  page_a_ctx_t *ctx = (page_a_ctx_t *)malloc(sizeof(page_a_ctx_t));
-  if (!ctx)
-    return NULL;
-  ctx->dummy = 0;
-  return ctx;
-}
-
-/* 页面 B 初始化 */
-static void *page_b_init(void *args) {
-  page_b_ctx_t *ctx = (page_b_ctx_t *)malloc(sizeof(page_b_ctx_t));
-  if (!ctx)
-    return NULL;
-  ctx->counter = 0;
-  return ctx;
-}
-
-/* 页面 B 的事件回调 */
-static void page_b_btn_event_cb(lv_event_t *e) { gs_nav_pop(); }
-
-static lv_obj_t *page_a_render(lv_obj_t *parent, void *ctx) {
+static lv_obj_t *splash_page(lv_obj_t *parent, void *ctx) {
+  // 创建背景容器
   lv_obj_t *cont = lv_obj_create(parent);
-  lv_obj_set_size(cont, LV_PCT(100), LV_PCT(100));
-  lv_obj_set_style_bg_color(cont, lv_palette_main(LV_PALETTE_GREEN), 0);
+  lv_obj_set_size(cont, 320, 240);
+  lv_obj_set_scrollbar_mode(cont, LV_SCROLLBAR_MODE_OFF);
+  lv_obj_set_style_border_width(cont, 0, 0);
 
+  // 创建旋转加载动画
+  lv_obj_t *spinner = lv_spinner_create(cont);
+  lv_spinner_set_anim_params(spinner, 4000, 200);
+  lv_obj_set_size(spinner, 60, 60);
+
+  lv_obj_set_size(spinner, 60, 60);
+  lv_obj_align(spinner, LV_ALIGN_CENTER, 0, -20);
+  lv_obj_set_style_arc_width(spinner, 6, LV_PART_MAIN);
+  lv_obj_set_style_arc_width(spinner, 6, LV_PART_INDICATOR);
+  lv_obj_set_style_arc_color(spinner, lv_color_hex(0x2195f6),
+                             LV_PART_INDICATOR);
+
+  // 加载提示文字
   lv_obj_t *label = lv_label_create(cont);
-  lv_label_set_text(label, "Page A\nClick button to go to Page B");
-  lv_obj_center(label);
+  lv_label_set_text(label, "System Initializing...");
+  lv_obj_set_style_text_color(label, lv_color_hex(0x000000), 0);
+  lv_obj_set_style_text_font(label, &lv_font_montserrat_14, 0);
+  lv_obj_align(label, LV_ALIGN_CENTER, 0, 40);
 
-  lv_obj_t *btn = lv_btn_create(cont);
-  lv_obj_align(btn, LV_ALIGN_BOTTOM_MID, 0, -30);
-  lv_obj_t *btn_label = lv_label_create(btn);
-  lv_label_set_text(btn_label, "Go to Page B");
-
-  lv_obj_add_event_cb(btn, page_a_btn_event_cb, LV_EVENT_CLICKED, NULL);
   return cont;
 }
 
-static void page_a_deinit(void *ctx) {
-  if (ctx)
-    free(ctx);
-}
+const gs_page_desc_t page_splash = {
+    .init_cb = NULL, .render_cb = splash_page, .deinit_cb = NULL};
 
-static lv_obj_t *page_b_render(lv_obj_t *parent, void *ctx) {
-  page_b_ctx_t *b_ctx = (page_b_ctx_t *)ctx;
-  lv_obj_t *cont = lv_obj_create(parent);
-  lv_obj_set_size(cont, LV_PCT(100), LV_PCT(100));
-  lv_obj_set_style_bg_color(cont, lv_palette_main(LV_PALETTE_ORANGE), 0);
-
-  lv_obj_t *label = lv_label_create(cont);
-  lv_label_set_text_fmt(label, "Page B\nCounter: %d", b_ctx->counter);
-  lv_obj_center(label);
-
-  lv_obj_t *btn = lv_btn_create(cont);
-  lv_obj_align(btn, LV_ALIGN_BOTTOM_MID, 0, -30);
-  lv_obj_t *btn_label = lv_label_create(btn);
-  lv_label_set_text(btn_label, "Back");
-
-  lv_obj_add_event_cb(btn, page_b_btn_event_cb, LV_EVENT_CLICKED, NULL);
-  return cont;
-}
-
-static void page_b_deinit(void *ctx) {
-  if (ctx)
-    free(ctx);
-}
-
-/* 定义页面描述符 */
-const gs_page_desc_t page_a_desc = {
-    .init_cb = page_a_init,
-    .render_cb = page_a_render,
-    .deinit_cb = page_a_deinit,
-};
-const gs_page_desc_t page_b_desc = {
-    .init_cb = page_b_init,
-    .render_cb = page_b_render,
-    .deinit_cb = page_b_deinit,
-};
-
-#include "prov_qr.h"
-
-static void test_gs_nav(void) {
+static void global_service_init() {
   lv_obj_t *container = lv_scr_act();
   gs_nav_init(container);
+  // 加一个 Splash
+  gs_nav_push(&page_splash, NULL);
+
   wifi_prov_init();
+
+  xEventGroupWaitBits(wifi_event_group, WIFI_CONNECTED_EVENT, true, true,
+                      portMAX_DELAY);
+  sntp_helper_init();
+  sntp_helper_set_timezone("CST-8");
+  sntp_helper_time("ntp.aliyun.com", 5000);
 }
 
 void app_main(void) {
@@ -117,5 +68,13 @@ void app_main(void) {
   bsp_littlefs_mount(); // SPIFFS文件系统初始化
   bsp_codec_init();     // 音频初始化
 
-  test_gs_nav();
+  // 全局初始化
+  global_service_init();
+
+  if (lvgl_port_lock(1000)) {
+    extern const gs_page_desc_t page_main;
+    gs_nav_pop();
+    gs_nav_push(&page_main, NULL);
+    lvgl_port_unlock();
+  }
 }
