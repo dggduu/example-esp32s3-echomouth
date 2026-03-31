@@ -6,8 +6,6 @@
 
 #define MAX_STACK_DEPTH 8
 
-/* 1. 结构体定义必须放在函数使用之前 */
-
 typedef struct {
   const gs_page_desc_t *desc;
   void *ctx;
@@ -18,8 +16,6 @@ typedef struct {
   void *args;
 } gs_nav_async_payload_t;
 
-/* 2. 静态全局状态 */
-
 static struct {
   stack_item_t stack[MAX_STACK_DEPTH];
   int8_t top;
@@ -27,14 +23,11 @@ static struct {
   bool busy;
 } s_nav = {.top = -1, .busy = false, .container = NULL};
 
-/* 3. 内部辅助函数 */
-
 static void render_page_internal(int idx) {
   if (idx < 0 || idx > s_nav.top || !s_nav.container) {
     return;
   }
 
-  // 假设调用者已持有 LVGL Lock
   lv_obj_clean(s_nav.container);
 
   if (s_nav.stack[idx].desc && s_nav.stack[idx].desc->render_cb) {
@@ -45,8 +38,6 @@ static void render_page_internal(int idx) {
     }
   }
 }
-
-/* 4. 公开 API 实现 */
 
 void gs_nav_init(lv_obj_t *container) {
   if (!container)
@@ -70,7 +61,7 @@ int gs_nav_push(const gs_page_desc_t *page, void *args) {
   if (lvgl_port_lock(-1)) {
     s_nav.busy = true;
 
-    // 初始化上下文 (根据你的设计，init_cb 可能会创建数据)
+    // 初始化上下文
     void *ctx = page->init_cb ? page->init_cb(args) : NULL;
 
     s_nav.top++;
@@ -125,8 +116,6 @@ void gs_nav_loop(void) {
     lvgl_port_unlock();
   }
 }
-
-/* 5. 异步 API 实现 (关键：定义顺序已修复) */
 
 static void gs_nav_push_async_cb(void *p) {
   gs_nav_async_payload_t *payload = (gs_nav_async_payload_t *)p;

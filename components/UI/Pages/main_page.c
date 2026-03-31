@@ -9,16 +9,14 @@ typedef struct {
   lv_obj_t *lbl_countdown;
   lv_obj_t *lbl_date;
   lv_obj_t *lbl_clock;
-  uint32_t last_tick; // 用于逻辑上的频率控制
+  uint32_t last_tick;
 } main_page_ctx_t;
 
-// 页面逻辑更新函数：由外部导航框架的状态机周期性调用
 static void main_page_update(void *ctx_in) {
   main_page_ctx_t *ctx = (main_page_ctx_t *)ctx_in;
   if (!ctx)
     return;
 
-  // 频率控制：每 1000ms 执行一次，不阻塞主任务
   if (lv_tick_elaps(ctx->last_tick) < 1000)
     return;
   ctx->last_tick = lv_tick_get();
@@ -73,11 +71,10 @@ static lv_obj_t *main_page_render(lv_obj_t *parent, void *ctx_in) {
 
 static void main_page_deinit(void *ctx_in) {
   if (ctx_in)
-    free(ctx_in); // 没有任何 timer 需要清理，极大降低 crash 风险
+    free(ctx_in);
 }
 
-const gs_page_desc_t page_main = {
-    .init_cb = main_page_init,
-    .render_cb = main_page_render,
-    .update_cb = main_page_update, // 新增：页面逻辑轮询回调
-    .deinit_cb = main_page_deinit};
+const gs_page_desc_t page_main = {.init_cb = main_page_init,
+                                  .render_cb = main_page_render,
+                                  .update_cb = main_page_update,
+                                  .deinit_cb = main_page_deinit};

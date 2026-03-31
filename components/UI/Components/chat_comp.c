@@ -9,6 +9,8 @@
 #include <stdio.h>
 #include <time.h>
 
+#include "net_adapter.h"
+
 static lv_obj_t *s_bubbles[CHAT_WINDOW_SIZE]; // 气泡容器池
 static lv_obj_t *s_labels[CHAT_WINDOW_SIZE];  // 文本标签池
 static lv_obj_t *s_textarea;
@@ -171,10 +173,20 @@ lv_obj_t *chat_comp_create(lv_obj_t *parent) {
   return s_root;
 }
 
-void chat_comp_loop(void) {
+// void chat_comp_loop(void) {
+//   chat_service_loop();
+//   if (chat_window_is_dirty()) {
+//     render_window();
+//     chat_window_clear_dirty();
+//   }
+// }
+
+void chat_comp_loop() {
   chat_service_loop();
   if (chat_window_is_dirty()) {
     render_window();
     chat_window_clear_dirty();
+
+    lv_obj_scroll_to_view(s_bubbles[CHAT_WINDOW_SIZE - 1], LV_ANIM_ON);
   }
 }

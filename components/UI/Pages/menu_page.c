@@ -6,9 +6,19 @@
 #define MENU_BG_COLOR lv_color_hex(0xf4f4f5)
 #define MENU_TEXT_COLOR lv_color_hex(0x333333)
 
+extern const gs_page_desc_t page_chat;
+
 static void menu_item_click_cb(lv_event_t *e) {
   const char *txt = (const char *)lv_event_get_user_data(e);
-  if (txt && strcmp(txt, "BACK") == 0) {
+  if (!txt)
+    return;
+  if (strcmp(txt, "HOME") == 0) {
+    gs_nav_pop();
+  } else if (strcmp(txt, "CHAT") == 0) {
+    gs_nav_push_async(&page_chat, NULL);
+  } else if (strcmp(txt, "TODO") == 0) {
+    gs_nav_pop();
+  } else if (strcmp(txt, "SETTING") == 0) {
     gs_nav_pop();
   }
 }
@@ -40,7 +50,7 @@ static lv_obj_t *menu_page_render(lv_obj_t *parent, void *ctx) {
     const char *icon;
     const char *name;
     const char *data;
-  } items[] = {{LV_SYMBOL_HOME, "Home", "BACK"},
+  } items[] = {{LV_SYMBOL_HOME, "Home", "HOME"},
                {LV_SYMBOL_CALL, "Chat", "CHAT"},
                {LV_SYMBOL_LIST, "ToDoList", "TODO"},
                {LV_SYMBOL_SETTINGS, "Settings", "SETTING"}};

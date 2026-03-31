@@ -1,4 +1,4 @@
-idf_component_register(SRCS "socket_prov.c" "esp32_s3_szp.c" "main.c" "sntp_helper.c"
+idf_component_register(SRCS "esp32_s3_szp.c" "main.c" "sntp_helper.c"
                     INCLUDE_DIRS "."
                     )
 

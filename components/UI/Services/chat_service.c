@@ -26,12 +26,11 @@ bool chat_window_is_dirty(void) { return s_window_dirty; }
 void chat_window_clear_dirty(void) { s_window_dirty = false; }
 
 /* ------------------ 协议发送 ------------------ */
-
 static void send_mode_switch(uint8_t mode) {
 
   printf("[SERVICE] Switching mode to %u\n", mode);
   uint8_t buf[32];
-  size_t len = encode_mode_switch_packet(buf, mode); // 你已有协议封装
+  size_t len = encode_mode_switch_packet(buf, mode);
   net_ws_send(buf, len);
 }
 
@@ -48,7 +47,6 @@ static void request_history(uint32_t last_id, uint8_t dir) {
 }
 
 /* ------------------ 状态切换 ------------------ */
-
 void chat_enter_live(void) {
   printf("[SERVICE] Entering LIVE mode\n");
   s_state = CHAT_LIVE;

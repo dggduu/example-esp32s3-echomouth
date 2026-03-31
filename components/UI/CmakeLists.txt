@@ -15,6 +15,7 @@ idf_component_register(
         ${CMAKE_CURRENT_LIST_DIR}/Services/chat_service.c
 
         ${CMAKE_CURRENT_LIST_DIR}/Pages/main_page.c
+        ${CMAKE_CURRENT_LIST_DIR}/Pages/chat_page.c
         ${CMAKE_CURRENT_LIST_DIR}/Pages/menu_page.c
     INCLUDE_DIRS
         "."
@@ -29,4 +30,6 @@ idf_component_register(
         AHEasing
         esp_lvgl_adapter
         esp_lvgl_port
+
+        wifi_prov
 )
