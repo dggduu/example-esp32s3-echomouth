@@ -12,6 +12,8 @@
 #include <freertos/event_groups.h>
 #include <freertos/task.h>
 
+#include "my_theme.h"
+
 #include "esp_websocket_client.h"
 
 extern EventGroupHandle_t wifi_event_group;
@@ -125,6 +127,8 @@ void app_main(void) {
 
   bsp_littlefs_mount(); // SPIFFS文件系统初始化
   bsp_codec_init();     // 音频初始化
+
+  my_ui_theme_init();
 
   // 全局初始化
   global_service_init();

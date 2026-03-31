@@ -46,7 +46,6 @@ static void request_history(uint32_t last_id, uint8_t dir) {
   net_ws_send(buf, len);
 }
 
-/* ------------------ 状态切换 ------------------ */
 void chat_enter_live(void) {
   printf("[SERVICE] Entering LIVE mode\n");
   s_state = CHAT_LIVE;
@@ -61,7 +60,6 @@ void chat_enter_history(uint32_t last_id, uint8_t direction) {
   request_history(last_id, direction);
 }
 
-/* ------------------ 发送消息 ------------------ */
 
 void chat_send_text(const char *text) {
   uint8_t buf[512];
@@ -69,7 +67,6 @@ void chat_send_text(const char *text) {
   net_ws_send(buf, len);
 }
 
-/* ------------------ 批量处理 ------------------ */
 
 static void apply_batch(void) {
   chat_fifo_clear(&s_window);

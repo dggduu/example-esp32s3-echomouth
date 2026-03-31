@@ -9,13 +9,21 @@
 #include <stdio.h>
 #include <time.h>
 
+#include "esp_log.h"
+
 #include "net_adapter.h"
+
+#include "gs_nav.h"
+
+static const char *TAG = "CHAT_COMP";
 
 static lv_obj_t *s_bubbles[CHAT_WINDOW_SIZE]; // 气泡容器池
 static lv_obj_t *s_labels[CHAT_WINDOW_SIZE];  // 文本标签池
 static lv_obj_t *s_textarea;
 static lv_obj_t *s_root;
 static lv_obj_t *s_chat_viewport;
+
+LV_FONT_DECLARE(chinese_font_14px);
 
 // 拼音IME回调
 static void ta_event_cb(lv_event_t *e) {
@@ -55,10 +63,12 @@ static void render_window(void) {
       time_buf[0] = '\0';
     }
 
-    printf("[COMP]:RENDERING MESSAGE sender=%d, id=%ld: %s\r\n", m->sender,
-           m->msg_id, m->text);
+    ESP_LOGI(TAG, "[COMP]:RENDERING MESSAGE sender=%d, id=%ld: %s\r\n",
+             m->sender, m->msg_id, m->text);
 
     lv_label_set_text_fmt(s_labels[i], "[%s]\n%s", time_buf, m->text);
+
+    lv_obj_set_style_text_font(s_bubbles[i], &chinese_font_14px, 0);
 
     if (m->sender == 1) { // child
       lv_obj_set_style_bg_color(s_bubbles[i], lv_color_hex(0x95EC69), 0);
@@ -80,6 +90,8 @@ static void send_cb(lv_event_t *e) {
   chat_send_text(txt);
   lv_textarea_set_text(s_textarea, "");
 }
+
+static void chat_exit_cb(lv_event_t *e) { gs_nav_pop_async(); }
 
 static void up_btn_cb(lv_event_t *e) {
   chat_fifo_t *w = chat_get_window();
@@ -104,19 +116,36 @@ void chat_show_new_msg_toast(void) {
 
 lv_obj_t *chat_comp_create(lv_obj_t *parent) {
   chat_service_init();
+
+  /* ================= ROOT ================= */
   s_root = lv_obj_create(parent);
   lv_obj_set_size(s_root, LV_PCT(100), LV_PCT(100));
+  lv_obj_set_flex_flow(s_root, LV_FLEX_FLOW_COLUMN);
+  lv_obj_set_style_pad_all(s_root, 0, 0);
 
+  /* ================= HEADER ================= */
+  lv_obj_t *header = lv_obj_create(s_root);
+  lv_obj_set_size(header, LV_PCT(100), LV_PCT(18));
+  lv_obj_set_flex_flow(header, LV_FLEX_FLOW_ROW);
+  lv_obj_set_style_pad_all(header, 5, 0);
+
+  lv_obj_t *exit_btn = lv_btn_create(header);
+  lv_obj_set_size(exit_btn, 70, 35);
+  lv_obj_t *exit_label = lv_label_create(exit_btn);
+  lv_label_set_text(exit_label, "Exit");
+  lv_obj_center(exit_label);
+  lv_obj_add_event_cb(exit_btn, &chat_exit_cb, LV_EVENT_CLICKED, NULL);
+
+  /* ================= CHAT VIEWPORT ================= */
   s_chat_viewport = lv_obj_create(s_root);
-  lv_obj_set_size(s_chat_viewport, LV_PCT(100), LV_PCT(70));
-
-  lv_obj_align(s_chat_viewport, LV_ALIGN_TOP_MID, 0, 0);
+  lv_obj_set_size(s_chat_viewport, LV_PCT(100), LV_PCT(60));
   lv_obj_set_flex_flow(s_chat_viewport, LV_FLEX_FLOW_COLUMN);
+  lv_obj_set_scroll_dir(s_chat_viewport, LV_DIR_VER);
 
   for (int i = 0; i < CHAT_WINDOW_SIZE; i++) {
     s_bubbles[i] = lv_obj_create(s_chat_viewport);
-    lv_obj_set_size(s_bubbles[i], LV_SIZE_CONTENT, LV_SIZE_CONTENT);
-    lv_obj_set_width(s_bubbles[i], LV_PCT(75)); // 限制气泡最大宽度
+    lv_obj_set_width(s_bubbles[i], LV_PCT(75));
+    lv_obj_set_height(s_bubbles[i], LV_SIZE_CONTENT);
     lv_obj_set_style_pad_all(s_bubbles[i], 8, 0);
     lv_obj_set_style_radius(s_bubbles[i], 12, 0);
 
@@ -125,43 +154,50 @@ lv_obj_t *chat_comp_create(lv_obj_t *parent) {
     lv_label_set_long_mode(s_labels[i], LV_LABEL_LONG_WRAP);
   }
 
-  s_textarea = lv_textarea_create(s_root);
-  lv_obj_set_size(s_textarea, LV_PCT(60), LV_SIZE_CONTENT);
-  lv_obj_align(s_textarea, LV_ALIGN_BOTTOM_LEFT, 10, -10);
+  /* ================= FOOTER ================= */
+  lv_obj_t *footer = lv_obj_create(s_root);
+  lv_obj_set_size(footer, LV_PCT(100), LV_PCT(18));
+  lv_obj_set_flex_flow(footer, LV_FLEX_FLOW_ROW);
+  lv_obj_set_flex_align(footer, LV_FLEX_ALIGN_START, LV_FLEX_ALIGN_CENTER,
+                        LV_FLEX_ALIGN_CENTER);
+
+  /* textarea */
+  s_textarea = lv_textarea_create(footer);
+  lv_obj_set_width(s_textarea, LV_PCT(50));
   lv_textarea_set_one_line(s_textarea, true);
 
-  s_btn_container = lv_obj_create(s_root);
-  lv_obj_set_size(s_btn_container, LV_PCT(35), LV_SIZE_CONTENT);
-  lv_obj_align(s_btn_container, LV_ALIGN_BOTTOM_RIGHT, -5, -10);
-  lv_obj_set_flex_flow(s_btn_container, LV_FLEX_FLOW_ROW);
-  lv_obj_set_style_pad_all(s_btn_container, 0, 0);
-
-  lv_obj_t *send_btn = lv_btn_create(s_btn_container);
+  /* send */
+  lv_obj_t *send_btn = lv_btn_create(footer);
+  lv_obj_set_size(send_btn, 60, 40);
   lv_obj_add_event_cb(send_btn, send_cb, LV_EVENT_CLICKED, NULL);
   lv_obj_t *send_label = lv_label_create(send_btn);
   lv_label_set_text(send_label, "Send");
   lv_obj_center(send_label);
 
-  lv_obj_t *up_btn = lv_btn_create(s_btn_container);
+  /* up */
+  lv_obj_t *up_btn = lv_btn_create(footer);
+  lv_obj_set_size(up_btn, 50, 40);
   lv_obj_add_event_cb(up_btn, up_btn_cb, LV_EVENT_CLICKED, NULL);
   lv_obj_t *up_label = lv_label_create(up_btn);
-  lv_label_set_text(up_label, "Up");
+  lv_label_set_text(up_label, "U");
   lv_obj_center(up_label);
 
-  lv_obj_t *down_btn = lv_btn_create(s_btn_container);
+  /* down */
+  lv_obj_t *down_btn = lv_btn_create(footer);
+  lv_obj_set_size(down_btn, 60, 40);
   lv_obj_add_event_cb(down_btn, down_btn_cb, LV_EVENT_CLICKED, NULL);
   lv_obj_t *down_label = lv_label_create(down_btn);
-  lv_label_set_text(down_label, "Down");
+  lv_label_set_text(down_label, "D");
   lv_obj_center(down_label);
 
-  // 将拼音IME系统挂载在全局屏幕而非局部视口，防止弹窗被截断
+  /* ================= IME ================= */
   lv_obj_t *pinyin_ime = lv_ime_pinyin_create(lv_screen_active());
-
   lv_obj_t *kb = lv_keyboard_create(lv_screen_active());
+  lv_obj_set_style_text_font(kb, &chinese_font_14px, 0);
+
   lv_ime_pinyin_set_keyboard(pinyin_ime, kb);
   lv_keyboard_set_textarea(kb, s_textarea);
   lv_obj_add_flag(kb, LV_OBJ_FLAG_HIDDEN);
-
   lv_obj_add_event_cb(s_textarea, ta_event_cb, LV_EVENT_ALL, kb);
 
   lv_obj_t *cand_panel = lv_ime_pinyin_get_cand_panel(pinyin_ime);
