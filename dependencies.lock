@@ -169,6 +169,26 @@ dependencies:
     - esp32c5
     - esp32c6
     version: 1.0.0
+  espressif/esp_websocket_client:
+    component_hash: c5a067a9fddea370c478017e66fac302f4b79c3d4027e9bdd42a019786cceb92
+    dependencies:
+    - name: idf
+      require: private
+      version: '>=5.0'
+    source:
+      registry_url: https://components.espressif.com/
+      type: service
+    version: 1.6.1
+  espressif/mdns:
+    component_hash: 1ebe3bd675bb9d1c58f52bc0b609b32f74e572b01c328f9e61282040c775495c
+    dependencies:
+    - name: idf
+      require: private
+      version: '>=5.0'
+    source:
+      registry_url: https://components.espressif.com/
+      type: service
+    version: 1.11.0
   idf:
     source:
       type: idf
@@ -199,9 +219,11 @@ direct_dependencies:
 - espressif/esp_lvgl_adapter
 - espressif/esp_lvgl_port
 - espressif/esp_new_jpeg
+- espressif/esp_websocket_client
+- espressif/mdns
 - idf
 - joltwallet/littlefs
 - lvgl/lvgl
-manifest_hash: 7cb54be701c7205368351bbbeb8c7cf1f1903f2f75926ff7647dff3dce8c410f
+manifest_hash: a2b8ee3fc68911857b112d5665033881fe4559883a9f93d98142af50f0f425a4
 target: esp32s3
 version: 2.0.0

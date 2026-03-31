@@ -6,9 +6,13 @@
 #include <esp_wifi.h>
 #include <stdio.h>
 
+#include "mdns.h"
+
 #include <freertos/FreeRTOS.h>
 #include <freertos/event_groups.h>
 #include <freertos/task.h>
+
+#include "esp_websocket_client.h"
 
 extern EventGroupHandle_t wifi_event_group;
 extern const int WIFI_CONNECTED_EVENT;
@@ -45,9 +49,74 @@ static lv_obj_t *splash_page(lv_obj_t *parent, void *ctx) {
 const gs_page_desc_t page_splash = {
     .init_cb = NULL, .render_cb = splash_page, .deinit_cb = NULL};
 
+void gui_flsuh_task(void *param) {
+  while (1) {
+    uint32_t sleep_ms = lv_timer_handler();
+
+    gs_nav_loop();
+
+    vTaskDelay(pdMS_TO_TICKS(sleep_ms <= 0 ? 1 : sleep_ms));
+  }
+}
+
+static const char *TAG = "MDNS_EXAMPLE";
+
+/**
+ * @brief 初始化 mDNS 服务
+ * @param hostname 希望在局域网中使用的名称，如 "esp32-s3"
+ */
+void init_mdns(const char *hostname) {
+  // 初始化 mDNS 组件
+  esp_err_t err = mdns_init();
+  if (err != ESP_OK) {
+    ESP_LOGE(TAG, "mDNS Init failed: %d", err);
+    return;
+  }
+
+  ESP_ERROR_CHECK(mdns_hostname_set(hostname));
+  ESP_LOGI(TAG, "mDNS hostname set to: [%s.local]", hostname);
+  ESP_ERROR_CHECK(mdns_instance_name_set("ESP32-S3 AI IoT Controller"));
+  mdns_service_add(NULL, "_http", "_tcp", 80, NULL, 0);
+
+  mdns_service_txt_item_set("_http", "_tcp", "version", "1.0.0");
+  mdns_service_txt_item_set("_http", "_tcp", "author", "Gemini");
+}
+
+void websocket_app_start(void) {
+  esp_websocket_client_config_t ws_cfg = {
+      .uri = "ws://ubuntu-s3.local:3000/chat/1/3/child",
+      .port = 3000,
+  };
+
+  ESP_LOGI(TAG, "Connecting to %s...", ws_cfg.uri);
+
+  esp_websocket_client_handle_t client = esp_websocket_client_init(&ws_cfg);
+
+  esp_websocket_client_start(client);
+}
+
+/**
+ * @brief 使用 mDNS 查询局域网内的其他主机 IP
+ */
+void query_mdns_host(const char *host_name) {
+  ESP_LOGI(TAG, "Querying for [%s.local]...", host_name);
+
+  struct esp_ip4_addr addr;
+  addr.addr = 0;
+
+  esp_err_t err = mdns_query_a(host_name, 2000, &addr);
+  if (err == ESP_OK) {
+    ESP_LOGI(TAG, "Found host! IP: " IPSTR, IP2STR(&addr));
+  } else {
+    ESP_LOGE(TAG, "Host not found or Query failed.");
+  }
+}
+
 static void global_service_init() {
+
   lv_obj_t *container = lv_scr_act();
   gs_nav_init(container);
+  xTaskCreate(gui_flsuh_task, "gui", 8196, NULL, 4, NULL);
   // 加一个 Splash
   gs_nav_push(&page_splash, NULL);
 
@@ -71,10 +140,15 @@ void app_main(void) {
   // 全局初始化
   global_service_init();
 
-  if (lvgl_port_lock(1000)) {
-    extern const gs_page_desc_t page_main;
-    gs_nav_pop();
-    gs_nav_push(&page_main, NULL);
-    lvgl_port_unlock();
-  }
+  init_mdns("esp32-s3");
+
+  vTaskDelay(pdMS_TO_TICKS(2000));
+  query_mdns_host("ubuntu-s3");
+  websocket_app_start();
+  // if (lvgl_port_lock(-1)) {
+  //   extern const gs_page_desc_t page_main;
+  //   gs_nav_pop();
+  //   gs_nav_push_async(&page_main, NULL);
+  //   lvgl_port_unlock();
+  // }
 }
