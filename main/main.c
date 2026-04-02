@@ -62,7 +62,7 @@ static void global_service_init() {
 
   lv_obj_t *container = lv_scr_act();
   gs_nav_init(container);
-  xTaskCreate(gui_flsuh_task, "gui", 8196, NULL, 4, NULL);
+  xTaskCreate(gui_flsuh_task, "gui", 16 * 1024, NULL, 4, NULL);
   // 加一个 Splash
   gs_nav_push(&page_splash, NULL);
 
@@ -240,18 +240,16 @@ void app_main(void) {
 
   my_ui_theme_init();
 
-  lv_obj_t *container = lv_scr_act();
-  gs_nav_init(container);
-  xTaskCreate(gui_flsuh_task, "gui", 1024 * 16, NULL, 4, NULL);
+  // lv_obj_t *container = lv_scr_act();
+  // gs_nav_init(container);
+  // xTaskCreate(gui_flsuh_task, "gui", 1024 * 16, NULL, 4, NULL);
 
+  // 全局初始化
+  global_service_init();
   if (lvgl_port_lock(-1)) {
     extern const gs_page_desc_t page_main;
     gs_nav_pop();
-    gs_nav_push_async(&page_cam, NULL);
+    gs_nav_push_async(&page_main, NULL);
     lvgl_port_unlock();
   }
-  // 全局初始化
-  // global_service_init();
-
-  // vTaskDelay(pdMS_TO_TICKS(2000));
 }

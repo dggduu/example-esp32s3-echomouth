@@ -33,6 +33,30 @@ dependencies:
       registry_url: https://components.espressif.com
       type: service
     version: 1.0.3
+  espressif/button:
+    component_hash: d0afa32f0e50d60bc0c6fc23f7eea98adc6b02cfe70b590bc52c23c506745287
+    dependencies:
+    - name: espressif/cmake_utilities
+      registry_url: https://components.espressif.com
+      require: private
+      version: '*'
+    - name: idf
+      require: private
+      version: '>=4.0'
+    source:
+      registry_url: https://components.espressif.com/
+      type: service
+    version: 4.1.6
+  espressif/cmake_utilities:
+    component_hash: 05165f30922b422b4b90c08845e6d449329b97370fbd06309803d8cb539d79e3
+    dependencies:
+    - name: idf
+      require: private
+      version: '>=4.1'
+    source:
+      registry_url: https://components.espressif.com
+      type: service
+    version: 1.1.1
   espressif/esp32-camera:
     component_hash: ac4228c825b891378bc0806869170d4ebc5d45ba8ebc519b4f8886a56ad2d123
     dependencies:
@@ -213,6 +237,7 @@ dependencies:
 direct_dependencies:
 - chmorgan/esp-audio-player
 - chmorgan/esp-file-iterator
+- espressif/button
 - espressif/esp32-camera
 - espressif/esp_codec_dev
 - espressif/esp_lcd_touch_ft5x06
@@ -224,6 +249,6 @@ direct_dependencies:
 - idf
 - joltwallet/littlefs
 - lvgl/lvgl
-manifest_hash: a2b8ee3fc68911857b112d5665033881fe4559883a9f93d98142af50f0f425a4
+manifest_hash: 0446f106d222771fa51ea9370e2232d2d5c07af7653cbb86517d2f8d05b4cc9f
 target: esp32s3
 version: 2.0.0
