@@ -1,122 +1,221 @@
 #include "cam_helper.h"
-#include "esp_heap_caps.h" // 解决 heap_caps_aligned_alloc 声明问题
-#include "esp_jpeg_dec.h"
+#include "driver/gpio.h"
 #include "esp_jpeg_enc.h"
 #include "esp_log.h"
-#include "gs_nav.h" // 必须包含你的导航系统头文件
-#include "lvgl.h"   // 必须包含 LVGL 主头文件
+#include "esp_timer.h"
+#include "freertos/FreeRTOS.h"
+#include "freertos/queue.h"
+#include "freertos/task.h"
+#include "gs_nav.h"
+#include "img_stack.h"
+#include "lvgl.h"
+#include <stdio.h>
+#include <string.h>
 
-static const char *TAG = "PAGE_CAM_HW";
+#include "esp_lvgl_port.h"
 
-typedef struct {
-  lv_obj_t *img_canvas;
-  lv_img_dsc_t img_dsc;
+#define TAG "PAGE_CAM"
+#define CAM_BUTTON_GPIO GPIO_NUM_0
+#define JPEG_MAX_SIZE (80 * 1024)
 
-  // 硬件组件句柄
-  cam_tools_t cam_tools;        // 之前封装的硬件编码器
-  jpeg_dec_handle_t dec_handle; // 硬件解码器句柄
+static lv_obj_t *img_obj;
+static lv_image_dsc_t img_dsc;
+static uint8_t *preview_buf = NULL;
+static size_t preview_buf_size = 0;
+static volatile bool frame_ready = false;
 
-  // 缓冲区
-  uint8_t *rgb_render_buf; // 解码后的显示内存 (16字节对齐)
-  int outbuf_len;          // 解码器建议的输出长度
-} cam_page_ctx_t;
+static QueueHandle_t cam_evt_queue = NULL;
+static TaskHandle_t cam_fetch_task_handle = NULL;
+static TaskHandle_t cam_capture_task_handle = NULL;
 
-// 1. 初始化页面：设置编解码器
-static void *page_cam_init(void *args) {
-  cam_page_ctx_t *ctx =
-      heap_caps_calloc(1, sizeof(cam_page_ctx_t), MALLOC_CAP_SPIRAM);
-  if (!ctx)
-    return NULL;
+/* ============================ */
+/* Camera Fetch Task (High Prio)*/
+/* ============================ */
 
-  // A. 初始化硬件编码器 (YUV -> JPEG)
-  cam_helper_enc_init(&ctx->cam_tools, 320, 240);
+static void cam_fetch_task(void *arg) {
+  ESP_LOGI(TAG, "Camera fetch task started");
+  while (1) {
+    // 使用标准驱动接口
+    camera_fb_t *fb = esp_camera_fb_get();
+    if (!fb) {
+      ESP_LOGW(TAG, "Camera capture failed (timeout)");
+      vTaskDelay(pdMS_TO_TICKS(10)); // 超时后稍微等待
+      continue;
+    }
 
-  // B. 初始化硬件解码器 (JPEG -> RGB565)
-  jpeg_dec_config_t dec_config = DEFAULT_JPEG_DEC_CONFIG();
-  dec_config.output_type = JPEG_PIXEL_FORMAT_RGB565_LE; // 匹配 LVGL 16位色
+    // 第一次运行时分配 PSRAM 缓冲区
+    if (!preview_buf) {
+      preview_buf = heap_caps_malloc(fb->len, MALLOC_CAP_SPIRAM);
+      if (preview_buf) {
 
-  if (jpeg_dec_open(&dec_config, &ctx->dec_handle) != JPEG_ERR_OK) {
-    ESP_LOGE(TAG, "JPEG Dec Open Failed");
-    return NULL;
+        ESP_LOGI("TAG", "PSRAM buffer allocated: %d bytes", fb->len);
+
+        img_dsc.header.cf = LV_COLOR_FORMAT_RGB565_SWAPPED;
+        img_dsc.header.w = fb->width;
+        img_dsc.header.h = fb->height;
+        img_dsc.header.stride = fb->width * 2;
+        img_dsc.data_size = fb->len;
+        img_dsc.data = preview_buf;
+      } else {
+        ESP_LOGE(TAG, "PSRAM allocation FAILED!");
+      }
+    }
+
+    if (preview_buf) {
+      memcpy(preview_buf, fb->buf, fb->len);
+      frame_ready = true;
+      ESP_LOGD(TAG, "Frame copied, frame_ready set");
+    }
+
+    if (preview_buf) {
+      if (lvgl_port_lock(0)) {
+        lv_image_set_src(img_obj, &img_dsc);
+        lv_obj_invalidate(img_obj);
+        lvgl_port_unlock();
+        ESP_LOGI(TAG, "Direct image set done");
+      }
+    }
+
+    esp_camera_fb_return(fb); // 必须立即释放 fb，否则驱动会 timeout
+
+    // 限制采集频率，减轻 PSRAM 带宽压力
+    // 目标 20 FPS: 1000 / 20 = 50ms
+    vTaskDelay(pdMS_TO_TICKS(40));
   }
-
-  // C. 预分配对齐的显示缓冲区
-  // RGB565 为 320*240*2 = 153600 字节
-  ctx->rgb_render_buf =
-      (uint8_t *)heap_caps_aligned_alloc(16, 320 * 240 * 2, MALLOC_CAP_SPIRAM);
-
-  // D. 绑定 LVGL 描述符
-  ctx->img_dsc.header.magic = LV_IMAGE_HEADER_MAGIC;
-  ctx->img_dsc.header.w = 320;
-  ctx->img_dsc.header.h = 240;
-  ctx->img_dsc.header.cf = LV_COLOR_FORMAT_RGB565;
-  ctx->img_dsc.data_size = 320 * 240 * 2;
-  ctx->img_dsc.data = ctx->rgb_render_buf;
-
-  return ctx;
 }
 
-static lv_obj_t *page_cam_render(lv_obj_t *parent, void *ctx_ptr) {
-  cam_page_ctx_t *ctx = (cam_page_ctx_t *)ctx_ptr;
-  ctx->img_canvas = lv_img_create(parent);
-  lv_obj_center(ctx->img_canvas);
-  lv_img_set_src(ctx->img_canvas, &ctx->img_dsc);
-  return ctx->img_canvas;
-}
+/* ============================ */
+/* Capture Logic                */
+/* ============================ */
 
-// 2. 核心逻辑：硬件闭环处理
-static void page_cam_update(void *ctx_ptr) {
-  cam_page_ctx_t *ctx = (cam_page_ctx_t *)ctx_ptr;
-  camera_fb_t *fb = esp_camera_fb_get();
-  if (!fb || !ctx->cam_tools.enc_handle || !ctx->dec_handle || !ctx)
+static void cam_do_capture(void) {
+  camera_fb_t *fb = cam_helper_get_fb();
+  if (!fb)
     return;
 
-  int jpg_size = 0;
-  // Step 1: 硬件编码 (YUV422 -> JPEG)
-  if (cam_helper_yuv2jpg_hw(&ctx->cam_tools, fb, &jpg_size) == ESP_OK) {
+  jpeg_enc_config_t cfg = DEFAULT_JPEG_ENC_CONFIG();
+  cfg.width = fb->width;
+  cfg.height = fb->height;
+  cfg.src_type = JPEG_PIXEL_FORMAT_RGB565_BE;
+  cfg.quality = 80;
+  cfg.task_enable = false;
 
-    // Step 2: 硬件解码 (JPEG -> RGB565)
-    jpeg_dec_io_t decode_io = {
-        .inbuf = ctx->cam_tools.out_jpg_buf, // 编码器的输出作为解码器的输入
-        .inbuf_len = jpg_size,
-        .outbuf = ctx->rgb_render_buf // 输出到显示缓冲区
-    };
+  jpeg_enc_handle_t enc;
+  if (jpeg_enc_open(&cfg, &enc) != JPEG_ERR_OK) {
+    cam_helper_return_fb(fb);
+    return;
+  }
 
-    // 解析头信息（可选，如果确定是QVGA可以简化，但规范要求调用）
-    jpeg_dec_header_info_t header_info;
-    if (jpeg_dec_parse_header(ctx->dec_handle, &decode_io, &header_info) ==
-        JPEG_ERR_OK) {
-      // 执行硬件解码
-      if (jpeg_dec_process(ctx->dec_handle, &decode_io) == JPEG_ERR_OK) {
-        // Step 3: 刷新 LVGL 界面
-        lv_obj_invalidate(ctx->img_canvas);
-      }
+  uint8_t *jpg_buf = jpeg_calloc_align(JPEG_MAX_SIZE, 16);
+  if (!jpg_buf) {
+    jpeg_enc_close(enc);
+    cam_helper_return_fb(fb);
+    return;
+  }
+
+  int out_len = 0;
+  if (jpeg_enc_process(enc, fb->buf, fb->len, jpg_buf, JPEG_MAX_SIZE,
+                       &out_len) == JPEG_ERR_OK) {
+    char path[128];
+    sprintf(path, "/littlefs/%llu.jpg", esp_timer_get_time() / 1000ULL);
+    FILE *f = fopen(path, "wb");
+    if (f) {
+      fwrite(jpg_buf, 1, out_len, f);
+      fclose(f);
+      img_stack_push(path);
+      ESP_LOGI(TAG, "Saved: %s (%d bytes)", path, out_len);
     }
   }
 
-  esp_camera_fb_return(fb);
+  jpeg_free_align(jpg_buf);
+  jpeg_enc_close(enc);
+  cam_helper_return_fb(fb);
 }
 
-static void page_cam_deinit(void *ctx_ptr) {
-  cam_page_ctx_t *ctx = (cam_page_ctx_t *)ctx_ptr;
-  if (!ctx)
-    return;
-
-  // 释放硬件资源
-  jpeg_enc_close(ctx->cam_tools.enc_handle);
-  jpeg_dec_close(ctx->dec_handle);
-
-  // 释放内存
-  if (ctx->cam_tools.out_jpg_buf)
-    free(ctx->cam_tools.out_jpg_buf);
-  if (ctx->rgb_render_buf)
-    free(ctx->rgb_render_buf);
-  free(ctx);
-
-  ESP_LOGI(TAG, "Page Cam HW Deinit Done");
+static void cam_event_task(void *arg) {
+  uint32_t io_num;
+  while (1) {
+    if (xQueueReceive(cam_evt_queue, &io_num, portMAX_DELAY)) {
+      cam_do_capture();
+    }
+  }
 }
 
-const gs_page_desc_t page_cam = {.init_cb = page_cam_init,
-                                 .render_cb = page_cam_render,
-                                 .update_cb = page_cam_update,
-                                 .deinit_cb = page_cam_deinit};
+/* ============================ */
+/* GPIO ISR                     */
+/* ============================ */
+
+static void IRAM_ATTR cam_gpio_isr(void *arg) {
+  uint32_t gpio_num = (uint32_t)arg;
+  xQueueSendFromISR(cam_evt_queue, &gpio_num, NULL);
+}
+
+/* ============================ */
+/* Page Lifecycle               */
+/* ============================ */
+
+static void *page_cam_init(void *args) {
+  gpio_config_t io_conf = {.intr_type = GPIO_INTR_NEGEDGE,
+                           .mode = GPIO_MODE_INPUT,
+                           .pin_bit_mask = 1ULL << CAM_BUTTON_GPIO,
+                           .pull_down_en = 0,
+                           .pull_up_en = 1};
+  gpio_config(&io_conf);
+
+  cam_evt_queue = xQueueCreate(4, sizeof(uint32_t));
+  gpio_install_isr_service(0);
+  gpio_isr_handler_add(CAM_BUTTON_GPIO, cam_gpio_isr, (void *)CAM_BUTTON_GPIO);
+
+  xTaskCreate(cam_event_task, "cam_cap_task", 1024 * 8, NULL, 5,
+              &cam_capture_task_handle); // 拍照任务
+  xTaskCreate(cam_fetch_task, "cam_fetch_task", 1024 * 8, NULL, 4,
+              &cam_fetch_task_handle); // 高优先级采集任务
+
+  return NULL;
+}
+
+static void page_cam_deinit(void *ctx) {
+  if (cam_fetch_task_handle)
+    vTaskDelete(cam_fetch_task_handle); // 销毁采集任务
+  if (cam_capture_task_handle)
+    vTaskDelete(cam_capture_task_handle);
+  if (cam_evt_queue)
+    vQueueDelete(cam_evt_queue);
+  gpio_isr_handler_remove(CAM_BUTTON_GPIO);
+
+  if (preview_buf) {
+    heap_caps_free(preview_buf); // 释放 PSRAM 缓存
+    preview_buf = NULL;
+  }
+}
+
+static void page_cam_update(void *ctx) {
+  // 在 page_cam_update 中
+  if (frame_ready && img_obj) {
+    ESP_LOGI(TAG, "Updating image, w=%d, h=%d", img_dsc.header.w,
+             img_dsc.header.h);
+    lv_image_set_src(img_obj, &img_dsc);
+    lv_obj_invalidate(img_obj);
+    frame_ready = false;
+  } else {
+    ESP_LOGW(TAG, "Update skipped: ready=%d, img_obj=%p", frame_ready, img_obj);
+  }
+}
+
+static lv_obj_t *page_cam_render(lv_obj_t *parent, void *ctx) {
+  lv_obj_t *cont = lv_obj_create(parent);
+  lv_obj_set_size(cont, LV_PCT(100), LV_PCT(100));
+  lv_obj_set_style_bg_color(cont, lv_color_black(), 0);
+
+  img_obj = lv_image_create(cont);
+  lv_obj_center(img_obj);
+
+  return cont;
+}
+
+const gs_page_desc_t page_cam = {
+    .init_cb = page_cam_init,
+    .render_cb = page_cam_render,
+    .update_cb = page_cam_update,
+    .deinit_cb = page_cam_deinit,
+};

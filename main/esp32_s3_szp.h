@@ -143,7 +143,7 @@ void bsp_lvgl_start_with_adapter(void);
 #define CAMERA_PIN_HREF 46
 #define CAMERA_PIN_PCLK 7
 
-#define XCLK_FREQ_HZ 24000000
+#define XCLK_FREQ_HZ 10000000
 
 void bsp_camera_init(void);
 void app_camera_lcd(void);
