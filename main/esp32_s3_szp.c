@@ -302,9 +302,11 @@ static lv_disp_t *bsp_display_lcd_init_with_adapter(void) {
   ESP_ERROR_CHECK(esp_lv_adapter_init(&adapter_cfg));
 
   esp_lv_adapter_display_config_t disp_cfg =
-      ESP_LV_ADAPTER_DISPLAY_SPI_WITHOUT_PSRAM_DEFAULT_CONFIG(
+      ESP_LV_ADAPTER_DISPLAY_SPI_WITH_PSRAM_DEFAULT_CONFIG(
           panel_handle, io_handle, BSP_LCD_H_RES, BSP_LCD_V_RES,
           ESP_LV_ADAPTER_ROTATE_0);
+
+  disp_cfg.profile.buffer_height = BSP_LCD_H_RES / 2;
 
   // disp_cfg.profile.require_double_buffer = false;
   // disp_cfg.profile.use_psram = false;
@@ -487,7 +489,7 @@ void bsp_camera_init(void) {
   config.pin_reset = CAMERA_PIN_RESET;
   config.xclk_freq_hz = XCLK_FREQ_HZ;
   config.pixel_format = PIXFORMAT_RGB565;
-  config.frame_size = FRAMESIZE_QVGA;
+  config.frame_size = FRAMESIZE_QQVGA;
   config.jpeg_quality = 12;
   config.fb_count = 2;
   config.fb_location = CAMERA_FB_IN_PSRAM;

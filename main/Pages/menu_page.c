@@ -3,10 +3,11 @@
 #include <string.h>
 
 #define MENU_PRIMARY_COLOR lv_color_hex(0x409eff)
-#define MENU_BG_COLOR lv_color_hex(0xf4f4f5)
+#define MENU_BG_COLOR lv_color_hex(0xf0f0f0)
 #define MENU_TEXT_COLOR lv_color_hex(0x333333)
 
 extern const gs_page_desc_t page_chat;
+extern const gs_page_desc_t page_cam;
 
 static void menu_item_click_cb(lv_event_t *e) {
   const char *txt = (const char *)lv_event_get_user_data(e);
@@ -18,6 +19,8 @@ static void menu_item_click_cb(lv_event_t *e) {
     gs_nav_push_async(&page_chat, NULL);
   } else if (strcmp(txt, "TODO") == 0) {
     gs_nav_pop();
+  } else if (strcmp(txt, "CAM") == 0) {
+    gs_nav_push_async(&page_cam, NULL);
   } else if (strcmp(txt, "SETTING") == 0) {
     gs_nav_pop();
   }
@@ -35,7 +38,7 @@ static lv_obj_t *menu_page_render(lv_obj_t *parent, void *ctx) {
 
   // 标题栏
   lv_obj_t *title = lv_label_create(cont);
-  lv_label_set_text(title, "System Menu");
+  lv_label_set_text(title, "Menu");
   lv_obj_set_style_text_font(title, &lv_font_montserrat_20, 0);
   lv_obj_set_style_margin_bottom(title, 10, 0);
 
@@ -50,10 +53,11 @@ static lv_obj_t *menu_page_render(lv_obj_t *parent, void *ctx) {
     const char *icon;
     const char *name;
     const char *data;
-  } items[] = {{LV_SYMBOL_HOME, "Home", "HOME"},
-               {LV_SYMBOL_CALL, "Chat", "CHAT"},
+  } items[] = {{LV_SYMBOL_HOME, "主页", "HOME"},
+               {LV_SYMBOL_CALL, "聊天", "CHAT"},
                {LV_SYMBOL_LIST, "ToDoList", "TODO"},
-               {LV_SYMBOL_SETTINGS, "Settings", "SETTING"}};
+               {LV_SYMBOL_PLAY, "相机", "CAM"},
+               {LV_SYMBOL_SETTINGS, "设置", "SETTING"}};
 
   for (int i = 0; i < 4; i++) {
     lv_obj_t *btn = lv_list_add_btn(list, items[i].icon, items[i].name);

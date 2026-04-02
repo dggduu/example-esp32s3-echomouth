@@ -77,6 +77,7 @@ void net_ws_disconnect(void) {
   if (g_socket_fd >= 0) {
     socket_prov_close(g_socket_fd);
     g_socket_fd = -1;
+
     ESP_LOGI(TAG, "Disconnected");
   }
 }

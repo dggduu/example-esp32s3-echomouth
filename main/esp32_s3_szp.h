@@ -154,7 +154,7 @@ void app_camera_lcd(void);
 
 /***********************************************************/
 /***************    SPIFFS文件系统 ↓   *********************/
-#define SPIFFS_BASE "/spiffs"
+#define SPIFFS_BASE "/littlefs"
 
 esp_err_t bsp_spiffs_mount(void);
 esp_err_t bsp_littlefs_mount(void);
