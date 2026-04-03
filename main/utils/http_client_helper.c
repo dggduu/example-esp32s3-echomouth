@@ -125,6 +125,7 @@ static bool perform_request(esp_http_client_method_t method, const char *path,
   int status = esp_http_client_get_status_code(client);
   if (status != 200) {
     ESP_LOGE(TAG, "HTTP status error: %d", status);
+    ESP_LOGE(TAG, "HTTP URL: %s method:%d", url, (int)method);
     esp_http_client_cleanup(client);
     return false;
   }
