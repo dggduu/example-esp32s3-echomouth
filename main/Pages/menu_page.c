@@ -8,6 +8,7 @@
 
 extern const gs_page_desc_t page_chat;
 extern const gs_page_desc_t page_cam;
+extern const gs_page_desc_t page_todo;
 
 static void menu_item_click_cb(lv_event_t *e) {
   const char *txt = (const char *)lv_event_get_user_data(e);
@@ -18,7 +19,8 @@ static void menu_item_click_cb(lv_event_t *e) {
   } else if (strcmp(txt, "CHAT") == 0) {
     gs_nav_push_async(&page_chat, NULL);
   } else if (strcmp(txt, "TODO") == 0) {
-    gs_nav_pop();
+    int device_id = 1;
+    gs_nav_push_async(&page_todo, &device_id);
   } else if (strcmp(txt, "CAM") == 0) {
     gs_nav_push_async(&page_cam, NULL);
   } else if (strcmp(txt, "SETTING") == 0) {

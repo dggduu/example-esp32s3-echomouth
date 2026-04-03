@@ -108,12 +108,9 @@ void gs_nav_loop(void) {
   if (s_nav.top < 0 || s_nav.busy)
     return;
 
-  if (lvgl_port_lock(-1)) {
-    stack_item_t *current = &s_nav.stack[s_nav.top];
-    if (current->desc && current->desc->update_cb && current->ctx) {
-      current->desc->update_cb(current->ctx);
-    }
-    lvgl_port_unlock();
+  stack_item_t *current = &s_nav.stack[s_nav.top];
+  if (current->desc && current->desc->update_cb && current->ctx) {
+    current->desc->update_cb(current->ctx);
   }
 }
 

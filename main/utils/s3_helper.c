@@ -6,11 +6,17 @@
 #include <stdio.h>
 #include <stdlib.h>
 
+#include "nvs_helper.h"
+
 #include "freertos/FreeRTOS.h"
 #include <freertos/task.h>
 
+#include "esp_log.h"
+
 #define DEVICE_ID 1
 #define TASK_ID 1
+
+static const char *TAG = "S3_helper";
 
 static void uploader_task(void *arg) {
   char path[128];
@@ -21,10 +27,19 @@ static void uploader_task(void *arg) {
       continue;
     }
 
+    int32_t deviceId = 0;
+    nvs_helper_get_i32("storage", "device_id", &deviceId);
+
+    if (!deviceId) {
+      deviceId = DEVICE_ID;
+      ESP_LOGE(TAG, "device_id not found at nvs flash, use default value :%d",
+               DEVICE_ID);
+    }
+
     /* 1. 获取 upload-url */
 
     char url[128];
-    sprintf(url, "http://localhost:3000/device/%d/upload-url?deviceId=%d",
+    sprintf(url, "http://aobara-pc.local:3000/device/%d/upload-url?deviceId=%d",
             DEVICE_ID, DEVICE_ID);
 
     char resp[512];
@@ -71,7 +86,7 @@ static void uploader_task(void *arg) {
 
     free(buf);
 
-    /* 4. POST /image */
+    /* 4. 向服务器回报操作 */
 
     cJSON *post = cJSON_CreateObject();
     cJSON_AddNumberToObject(post, "deviceId", DEVICE_ID);
@@ -81,7 +96,7 @@ static void uploader_task(void *arg) {
 
     char *json_str = cJSON_PrintUnformatted(post);
 
-    http_post_json("http://localhost:3000/device/image", json_str);
+    http_post_json("http://aobara-pc.local:3000/device/image", json_str);
 
     cJSON_Delete(post);
     free(json_str);

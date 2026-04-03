@@ -58,6 +58,36 @@ void gui_flsuh_task(void *param) {
   }
 }
 
+void init_mdns(const char *hostname) {
+  // 初始化 mDNS 组件
+  esp_err_t err = mdns_init();
+  if (err != ESP_OK) {
+    ESP_LOGE(TAG, "mDNS Init failed: %d", err);
+    return;
+  }
+
+  ESP_ERROR_CHECK(mdns_hostname_set(hostname));
+  ESP_LOGI(TAG, "mDNS hostname set to: [%s.local]", hostname);
+  ESP_ERROR_CHECK(mdns_instance_name_set("ESP32-S3 Iot"));
+  mdns_service_add(NULL, "_http", "_tcp", 80, NULL, 0);
+
+  mdns_service_txt_item_set("_http", "_tcp", "version", "1.0.0");
+}
+
+void query_mdns_host(const char *host_name) {
+  ESP_LOGI(TAG, "Querying for [%s.local]...", host_name);
+
+  struct esp_ip4_addr addr;
+  addr.addr = 0;
+
+  esp_err_t err = mdns_query_a(host_name, 2000, &addr);
+  if (err == ESP_OK) {
+    ESP_LOGI(TAG, "Found host! IP: " IPSTR, IP2STR(&addr));
+  } else {
+    ESP_LOGE(TAG, "Host not found or Query failed.");
+  }
+}
+
 static void global_service_init() {
 
   lv_obj_t *container = lv_scr_act();
@@ -73,160 +103,15 @@ static void global_service_init() {
   sntp_helper_init();
   sntp_helper_set_timezone("CST-8");
   sntp_helper_time("ntp.aliyun.com", 5000);
-}
 
-#include "esp_jpeg_dec.h"
-#include "esp_jpeg_enc.h"
-
-static void jpeg_encode_decode_once(void) {
-  camera_fb_t *fb = NULL;
-  jpeg_enc_handle_t enc = NULL;
-  jpeg_dec_handle_t dec = NULL;
-  jpeg_error_t ret;
-
-  uint8_t *jpg_buf = NULL;
-  uint8_t *rgb565_buf = NULL;
-
-  jpeg_dec_io_t *jpeg_io = NULL;
-  jpeg_dec_header_info_t *header = NULL;
-
-  /* ---------------- 1. 获取摄像头RGB565 ---------------- */
-  fb = esp_camera_fb_get();
-  if (!fb) {
-    ESP_LOGE(TAG, "Camera capture failed");
-    return;
-  }
-
-  ESP_LOGI(TAG, "Camera frame: %dx%d, len=%d", fb->width, fb->height, fb->len);
-
-  /* ---------------- 2. JPEG编码 ---------------- */
-  jpeg_enc_config_t enc_cfg = DEFAULT_JPEG_ENC_CONFIG();
-  enc_cfg.width = fb->width;
-  enc_cfg.height = fb->height;
-  enc_cfg.src_type = JPEG_PIXEL_FORMAT_RGB565_BE;
-  enc_cfg.subsampling = JPEG_SUBSAMPLE_420;
-  enc_cfg.quality = 80;
-  enc_cfg.task_enable = false;
-
-  ret = jpeg_enc_open(&enc_cfg, &enc);
-  if (ret != JPEG_ERR_OK) {
-    ESP_LOGE(TAG, "jpeg_enc_open failed");
-    goto cleanup;
-  }
-
-  int jpg_max_size = 80 * 1024;
-  int jpg_len = 0;
-
-  jpg_buf = jpeg_calloc_align(jpg_max_size, 16);
-  if (!jpg_buf) {
-    ESP_LOGE(TAG, "No mem for jpg_buf");
-    goto cleanup;
-  }
-
-  ret =
-      jpeg_enc_process(enc, fb->buf, fb->len, jpg_buf, jpg_max_size, &jpg_len);
-
-  if (ret != JPEG_ERR_OK) {
-    ESP_LOGE(TAG, "jpeg_enc_process failed: %d", ret);
-    goto cleanup;
-  }
-
-  ESP_LOGI(TAG, "JPEG encoded size: %d bytes", jpg_len);
-
-  /* ---------------- 3. 检查 JPEG Magic 头 ---------------- */
-  if (jpg_len >= 2) {
-    ESP_LOGI(TAG, "JPEG magic: %02X %02X", jpg_buf[0], jpg_buf[1]);
-
-    if (jpg_buf[0] == 0xFF && jpg_buf[1] == 0xD8) {
-      ESP_LOGI(TAG, "JPEG header OK (FFD8)");
-    } else {
-      ESP_LOGE(TAG, "JPEG header INVALID");
-      goto cleanup;
-    }
-  }
-
-  jpeg_enc_close(enc);
-  enc = NULL;
-
-  /* ---------------- 4. JPEG解码 ---------------- */
-  jpeg_dec_config_t dec_cfg = DEFAULT_JPEG_DEC_CONFIG();
-  dec_cfg.output_type = JPEG_PIXEL_FORMAT_RGB565_BE;
-
-  ret = jpeg_dec_open(&dec_cfg, &dec);
-  if (ret != JPEG_ERR_OK) {
-    ESP_LOGE(TAG, "jpeg_dec_open failed");
-    goto cleanup;
-  }
-
-  jpeg_io = calloc(1, sizeof(jpeg_dec_io_t));
-  header = calloc(1, sizeof(jpeg_dec_header_info_t));
-
-  jpeg_io->inbuf = jpg_buf;
-  jpeg_io->inbuf_len = jpg_len;
-
-  ret = jpeg_dec_parse_header(dec, jpeg_io, header);
-  if (ret != JPEG_ERR_OK) {
-    ESP_LOGE(TAG, "jpeg_dec_parse_header failed");
-    goto cleanup;
-  }
-
-  int rgb_size = header->width * header->height * 2;
-
-  rgb565_buf = jpeg_calloc_align(rgb_size, 16);
-  if (!rgb565_buf) {
-    ESP_LOGE(TAG, "No mem for rgb565_buf");
-    goto cleanup;
-  }
-
-  jpeg_io->outbuf = rgb565_buf;
-  jpeg_io->out_size = rgb_size;
-
-  ret = jpeg_dec_process(dec, jpeg_io);
-  if (ret != JPEG_ERR_OK) {
-    ESP_LOGE(TAG, "jpeg_dec_process failed");
-    goto cleanup;
-  }
-
-  ESP_LOGI(TAG, "JPEG decode success: %dx%d", header->width, header->height);
-
-  jpeg_dec_close(dec);
-  dec = NULL;
-
-  /* ---------------- 5. LVGL 显示 ---------------- */
-  static lv_image_dsc_t img_dsc;
-
-  img_dsc.header.cf = LV_COLOR_FORMAT_RGB565_SWAPPED;
-  img_dsc.header.w = header->width;
-  img_dsc.header.h = header->height;
-  img_dsc.data_size = rgb_size;
-  img_dsc.data = rgb565_buf;
-
-  lv_obj_t *img = lv_image_create(lv_scr_act());
-  lv_image_set_src(img, &img_dsc);
-  lv_obj_center(img);
-
-  ESP_LOGI(TAG, "Image displayed");
-
-cleanup:
-
-  if (enc)
-    jpeg_enc_close(enc);
-  if (dec)
-    jpeg_dec_close(dec);
-
-  if (jpeg_io)
-    free(jpeg_io);
-  if (header)
-    free(header);
-
-  if (jpg_buf)
-    jpeg_free_align(jpg_buf);
-
-  if (fb)
-    esp_camera_fb_return(fb);
+  init_mdns("esp32-s3");
+  vTaskDelay(pdMS_TO_TICKS(1000));
+  query_mdns_host("aobara-pc");
 }
 
 extern const gs_page_desc_t page_cam;
+
+#include "http_client_helper.h"
 
 void app_main(void) {
   bsp_i2c_init();
@@ -236,13 +121,8 @@ void app_main(void) {
   bsp_codec_init();
   bsp_camera_init();
 
-  // jpeg_encode_decode_once();
-
   my_ui_theme_init();
-
-  // lv_obj_t *container = lv_scr_act();
-  // gs_nav_init(container);
-  // xTaskCreate(gui_flsuh_task, "gui", 1024 * 16, NULL, 4, NULL);
+  http_helper_init();
 
   // 全局初始化
   global_service_init();

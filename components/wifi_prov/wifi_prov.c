@@ -174,19 +174,19 @@ esp_err_t custom_prov_data_handler(uint32_t session_id, const uint8_t *inbuf,
       if (deviceId_obj && cJSON_IsString(deviceId_obj) && parentId_obj &&
           cJSON_IsString(parentId_obj)) {
 
-        const char *device_id = deviceId_obj->valuestring;
-        const char *parent_id = parentId_obj->valuestring;
+        int32_t device_id = (int32_t)deviceId_obj->valueint;
+        int32_t parent_id = (int32_t)parentId_obj->valueint;
 
-        ESP_LOGI(TAG, "deviceId: %s, parentId: %s", device_id, parent_id);
+        ESP_LOGI(TAG, "deviceId: %d, parentId: %d", device_id, parent_id);
 
         // 存储到 NVS
         nvs_handle_t nvs_handle;
         ret = nvs_open("storage", NVS_READWRITE, &nvs_handle);
         if (ret == ESP_OK) {
-          ret = nvs_set_str(nvs_handle, "device_id", device_id);
+          ret = nvs_set_i32(nvs_handle, "device_id", device_id);
           if (ret != ESP_OK)
             ESP_LOGE(TAG, "Failed to set device_id: %s", esp_err_to_name(ret));
-          ret = nvs_set_str(nvs_handle, "parent_id", parent_id);
+          ret = nvs_set_i32(nvs_handle, "parent_id", parent_id);
           if (ret != ESP_OK)
             ESP_LOGE(TAG, "Failed to set parent_id: %s", esp_err_to_name(ret));
           nvs_commit(nvs_handle);

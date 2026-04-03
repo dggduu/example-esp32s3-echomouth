@@ -11,11 +11,9 @@ static RingbufHandle_t rx_ring_buf = NULL;
 static void websocket_event_handler(void *handler_args, esp_event_base_t base,
                                     int32_t event_id, void *event_data) {
   esp_websocket_event_data_t *data = (esp_websocket_event_data_t *)event_data;
-  // 只处理二进制数据帧
   if (event_id == WEBSOCKET_EVENT_DATA &&
       data->op_code == WS_TRANSPORT_OPCODES_BINARY) {
     if (rx_ring_buf && data->data_ptr && data->data_len > 0) {
-      // 字节缓冲区允许直接推入任意长度数据
       xRingbufferSend(rx_ring_buf, data->data_ptr, data->data_len, 0);
     }
   }
