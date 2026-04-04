@@ -11,6 +11,8 @@
 #define SERVER_PORT 3000
 #define URL_MAX_LEN 256
 
+#define HTTP_REV_BUF_SIZE 1024
+
 typedef struct {
   char *buffer;
   int max_len;
@@ -22,7 +24,7 @@ static SemaphoreHandle_t s_mutex = NULL;
 
 /* ======================= mDNS ======================= */
 
-static bool resolve_server_ip(char *ip, size_t len) {
+bool resolve_server_ip(char *ip, size_t len) {
   esp_ip4_addr_t addr;
 
   for (int i = 0; i < 3; i++) {
@@ -96,13 +98,12 @@ static bool perform_request(esp_http_client_method_t method, const char *path,
   http_resp_ctx_t resp_ctx = {
       .buffer = response, .max_len = max_len, .total_len = 0};
 
-  esp_http_client_config_t config = {
-      .url = url,
-      .method = method,
-      .timeout_ms = 5000,
-      .event_handler = http_event_handler,
-      .user_data = &resp_ctx,
-  };
+  esp_http_client_config_t config = {.url = url,
+                                     .method = method,
+                                     .timeout_ms = 5000,
+                                     .event_handler = http_event_handler,
+                                     .user_data = &resp_ctx,
+                                     .buffer_size = HTTP_REV_BUF_SIZE};
 
   esp_http_client_handle_t client = esp_http_client_init(&config);
   if (!client)
@@ -136,6 +137,48 @@ static bool perform_request(esp_http_client_method_t method, const char *path,
 
   esp_http_client_cleanup(client);
   return true;
+}
+
+bool http_put_binary(const char *url, uint8_t *data, int len) {
+  if (!url || !data || len <= 0) {
+    return false;
+  }
+
+  esp_http_client_config_t config = {
+      .url = url, // 直接使用传入的绝对 URL，而不是重新拼接
+      .method = HTTP_METHOD_PUT,
+      .timeout_ms = 15000, //  15 秒超时
+      .buffer_size = 2048,
+      .buffer_size_tx = 2048};
+
+  esp_http_client_handle_t client = esp_http_client_init(&config);
+  if (!client) {
+    return false;
+  }
+
+  // AWS S3 预签名 URL 上传通常严格校验 Content-Type，需与服务端签发时一致
+  esp_http_client_set_header(client, "Host", "aobara-pc.local:9000");
+  esp_http_client_set_header(client, "Content-Type", "image/jpeg");
+
+  esp_http_client_set_post_field(client, (const char *)data, len);
+
+  esp_err_t err = esp_http_client_perform(client);
+  bool success = false;
+
+  if (err == ESP_OK) {
+    int status = esp_http_client_get_status_code(client);
+    // S3 PUT 成功通常返回 200 OK
+    if (status >= 200 && status < 300) {
+      success = true;
+    } else {
+      ESP_LOGE(TAG, "PUT failed, status: %d, url: %s", status, url);
+    }
+  } else {
+    ESP_LOGE(TAG, "PUT perform failed: %s", esp_err_to_name(err));
+  }
+
+  esp_http_client_cleanup(client);
+  return success;
 }
 
 /* ======================= API ======================= */

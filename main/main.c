@@ -14,6 +14,10 @@
 #include <freertos/task.h>
 #include <stdio.h>
 
+#include "s3_helper.h"
+
+#include "img_stack.h"
+
 extern EventGroupHandle_t wifi_event_group;
 extern const int WIFI_CONNECTED_EVENT;
 
@@ -92,7 +96,7 @@ static void global_service_init() {
 
   lv_obj_t *container = lv_scr_act();
   gs_nav_init(container);
-  xTaskCreate(gui_flsuh_task, "gui", 16 * 1024, NULL, 4, NULL);
+  xTaskCreate(gui_flsuh_task, "gui", 12 * 1024, NULL, 4, NULL);
   // 加一个 Splash
   gs_nav_push(&page_splash, NULL);
 
@@ -107,6 +111,9 @@ static void global_service_init() {
   init_mdns("esp32-s3");
   vTaskDelay(pdMS_TO_TICKS(1000));
   query_mdns_host("aobara-pc");
+
+  // 启动s3服务
+  uploader_task_start();
 }
 
 extern const gs_page_desc_t page_cam;
@@ -123,9 +130,11 @@ void app_main(void) {
 
   my_ui_theme_init();
   http_helper_init();
-
   // 全局初始化
   global_service_init();
+  // 初始化图片上传调用互斥量
+  img_stack_init();
+
   if (lvgl_port_lock(-1)) {
     extern const gs_page_desc_t page_main;
     gs_nav_pop();

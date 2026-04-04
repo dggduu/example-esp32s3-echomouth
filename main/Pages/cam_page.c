@@ -12,9 +12,12 @@
 #include <stdio.h>
 #include <string.h>
 
+#include "cam_shared.h"
 #define TAG "PAGE_CAM"
 #define CAM_BUTTON_GPIO GPIO_NUM_0
 #define JPEG_MAX_SIZE (80 * 1024)
+
+#include <stdbool.h>
 
 typedef enum {
   CAM_STATE_PREVIEW = 0,
@@ -22,6 +25,8 @@ typedef enum {
 } cam_state_t;
 
 static cam_state_t s_state = CAM_STATE_PREVIEW;
+
+static cam_shared_ctx_t *s_shared_ctx = NULL;
 
 static lv_obj_t *img_obj;
 static lv_image_dsc_t img_dsc;
@@ -109,6 +114,57 @@ static void cam_take_picture(void) {
 }
 
 /*  保存 JPEG  */
+// static void cam_save_picture(void) {
+//   if (s_state != CAM_STATE_CAPTURED || !captured_fb)
+//     return;
+
+//   jpeg_enc_config_t cfg = DEFAULT_JPEG_ENC_CONFIG();
+//   cfg.width = captured_fb->width;
+//   cfg.height = captured_fb->height;
+//   cfg.src_type = JPEG_PIXEL_FORMAT_RGB565_BE;
+//   cfg.quality = 80;
+//   cfg.task_enable = false;
+
+//   jpeg_enc_handle_t enc;
+//   if (jpeg_enc_open(&cfg, &enc) != JPEG_ERR_OK)
+//     return;
+
+//   uint8_t *jpg_buf = jpeg_calloc_align(JPEG_MAX_SIZE, 16);
+//   if (!jpg_buf) {
+//     jpeg_enc_close(enc);
+//     return;
+//   }
+
+//   int out_len = 0;
+//   if (jpeg_enc_process(enc, captured_fb->buf, captured_fb->len, jpg_buf,
+//                        JPEG_MAX_SIZE, &out_len) == JPEG_ERR_OK) {
+//     if (out_len >= 4 && jpg_buf[0] == 0xFF && jpg_buf[1] == 0xD8 &&
+//         jpg_buf[out_len - 2] == 0xFF && jpg_buf[out_len - 1] == 0xD9) {
+//       char path[128];
+//       sprintf(path, "/littlefs/%llu.jpg", esp_timer_get_time() / 1000ULL);
+
+//       FILE *f = fopen(path, "wb");
+//       if (f) {
+//         fwrite(jpg_buf, 1, out_len, f);
+//         fclose(f);
+//         img_stack_push(path);
+//         ESP_LOGI(TAG, "Saved OK: %s (%d bytes)", path, out_len);
+//       }
+//     } else {
+//       ESP_LOGE(TAG, "JPEG magic check FAILED");
+//     }
+//   }
+
+//   jpeg_free_align(jpg_buf);
+//   jpeg_enc_close(enc);
+
+//   esp_camera_fb_return(captured_fb);
+//   captured_fb = NULL;
+
+//   s_state = CAM_STATE_PREVIEW;
+//   update_state_label();
+// }
+
 static void cam_save_picture(void) {
   if (s_state != CAM_STATE_CAPTURED || !captured_fb)
     return;
@@ -117,13 +173,14 @@ static void cam_save_picture(void) {
   cfg.width = captured_fb->width;
   cfg.height = captured_fb->height;
   cfg.src_type = JPEG_PIXEL_FORMAT_RGB565_BE;
-  cfg.quality = 80;
+  cfg.quality = 60;
   cfg.task_enable = false;
 
   jpeg_enc_handle_t enc;
   if (jpeg_enc_open(&cfg, &enc) != JPEG_ERR_OK)
     return;
 
+  // 采用对齐的缓存要求
   uint8_t *jpg_buf = jpeg_calloc_align(JPEG_MAX_SIZE, 16);
   if (!jpg_buf) {
     jpeg_enc_close(enc);
@@ -135,15 +192,34 @@ static void cam_save_picture(void) {
                        JPEG_MAX_SIZE, &out_len) == JPEG_ERR_OK) {
     if (out_len >= 4 && jpg_buf[0] == 0xFF && jpg_buf[1] == 0xD8 &&
         jpg_buf[out_len - 2] == 0xFF && jpg_buf[out_len - 1] == 0xD9) {
-      char path[128];
-      sprintf(path, "/littlefs/%llu.jpg", esp_timer_get_time() / 1000ULL);
+      char path[64];
+      snprintf(path, sizeof(path), "/littlefs/%llu.jpg",
+               esp_timer_get_time() / 1000ULL);
 
       FILE *f = fopen(path, "wb");
       if (f) {
         fwrite(jpg_buf, 1, out_len, f);
         fclose(f);
-        img_stack_push(path);
-        ESP_LOGI(TAG, "Saved OK: %s (%d bytes)", path, out_len);
+
+        // 1. 组装上传任务
+        img_job_t job = {0};
+        strlcpy(job.path, path, sizeof(job.path));
+
+        if (s_shared_ctx) {
+          job.task_id = s_shared_ctx->task_id;
+          job.ctx = s_shared_ctx;
+          s_shared_ctx->is_finished = false; // 重置状态，等待后台任务更新
+          s_shared_ctx->success = false;
+        }
+
+        // 2. 推入后台队列
+        if (img_stack_push(&job)) {
+          ESP_LOGI(TAG, "Saved and Queued: %s (%d bytes)", path, out_len);
+          // 3. 需求点：完成操作流水线后，立即退出界面交由上级监测状态
+          gs_nav_pop();
+        } else {
+          ESP_LOGE(TAG, "Failed to push image to upload stack");
+        }
       }
     } else {
       ESP_LOGE(TAG, "JPEG magic check FAILED");
@@ -152,12 +228,8 @@ static void cam_save_picture(void) {
 
   jpeg_free_align(jpg_buf);
   jpeg_enc_close(enc);
-
   esp_camera_fb_return(captured_fb);
   captured_fb = NULL;
-
-  s_state = CAM_STATE_PREVIEW;
-  update_state_label();
 }
 
 static void cam_cancel_capture(void) {
@@ -229,7 +301,37 @@ static lv_obj_t *create_text_btn(lv_obj_t *parent, const char *text,
   return btn;
 }
 
+// static void *page_cam_init(void *args) {
+//   preview_buf = heap_caps_malloc(160 * 120 * 2, MALLOC_CAP_SPIRAM);
+//   img_dsc.header.cf = LV_COLOR_FORMAT_RGB565_SWAPPED;
+//   img_dsc.header.w = 160;
+//   img_dsc.header.h = 120;
+//   img_dsc.header.stride = 160 * 2;
+//   img_dsc.data_size = 160 * 120 * 2;
+//   img_dsc.data = preview_buf;
+
+//   button_init();
+//   xTaskCreate(cam_fetch_task, "cam_fetch", 4096, NULL, 4,
+//   &fetch_task_handle);
+
+//   return NULL;
+// }
+
 static void *page_cam_init(void *args) {
+
+  if (s_shared_ctx == NULL) {
+    s_shared_ctx =
+        heap_caps_calloc(1, sizeof(cam_shared_ctx_t), MALLOC_CAP_INTERNAL);
+    if (s_shared_ctx == NULL) {
+      ESP_LOGE(TAG, "Failed to allocate shared context");
+      return NULL;
+    }
+  }
+
+  // 存taskId
+  s_shared_ctx->task_id = *(int *)args;
+  // s_shared_ctx->task_id = 4;
+
   preview_buf = heap_caps_malloc(160 * 120 * 2, MALLOC_CAP_SPIRAM);
   img_dsc.header.cf = LV_COLOR_FORMAT_RGB565_SWAPPED;
   img_dsc.header.w = 160;
