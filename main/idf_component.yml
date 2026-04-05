@@ -29,3 +29,4 @@ dependencies:
   espressif/esp_websocket_client: ^1.6.1
   espressif/button: ^4.1.6
   espressif/ble_ota: ^0.1.15
+  espressif/esp_encrypted_img: ^2.0.1

@@ -100,7 +100,7 @@ static bool perform_request(esp_http_client_method_t method, const char *path,
 
   esp_http_client_config_t config = {.url = url,
                                      .method = method,
-                                     .timeout_ms = 5000,
+                                     .timeout_ms = 15000,
                                      .event_handler = http_event_handler,
                                      .user_data = &resp_ctx,
                                      .buffer_size = HTTP_REV_BUF_SIZE};
