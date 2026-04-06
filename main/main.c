@@ -155,13 +155,15 @@ extern const gs_page_desc_t page_cam;
 
 #include "http_client_helper.h"
 
+#include "time_test_helper.h"
+
 void app_main(void) {
   bsp_i2c_init();
   pca9557_init();
   bsp_lvgl_start();
+  my_ui_theme_init();
   bsp_littlefs_mount();
 
-  // my_ui_theme_init();
   lv_obj_t *container = lv_scr_act();
   gs_nav_init(container);
 
@@ -177,7 +179,8 @@ void app_main(void) {
   } else {
 
     ESP_LOGI(TAG, "Booting into NORMAL mode");
-
+    bsp_codec_init();
+    bsp_camera_init();
     wifi_prov_init();
 
     xEventGroupWaitBits(wifi_event_group, WIFI_CONNECTED_EVENT, true, true,
@@ -193,10 +196,8 @@ void app_main(void) {
     // 启动s3服务
     uploader_task_start();
 
-    // esp_bt_controller_mem_release(ESP_BT_MODE_CLASSIC_BT);
     http_helper_init();
-    bsp_codec_init();
-    bsp_camera_init();
+
     // 初始化图片上传调用互斥量
     img_stack_init();
 

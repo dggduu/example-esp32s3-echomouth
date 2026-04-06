@@ -23,7 +23,7 @@
 #include "esp_codec_dev_defaults.h"
 
 #include "driver/sdmmc_host.h"
-#include "esp_spiffs.h"
+// #include "esp_spiffs.h"
 #include "esp_vfs_fat.h"
 #include "sdmmc_cmd.h"
 
@@ -156,7 +156,7 @@ void app_camera_lcd(void);
 /***************    SPIFFS文件系统 ↓   *********************/
 #define SPIFFS_BASE "/littlefs"
 
-esp_err_t bsp_spiffs_mount(void);
+// esp_err_t bsp_spiffs_mount(void);
 esp_err_t bsp_littlefs_mount(void);
 
 /***************    SPIFFS文件系统 ↑  *********************/

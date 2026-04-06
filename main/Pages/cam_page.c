@@ -48,35 +48,79 @@ static void update_state_label(void) {
   }
 }
 
-// 优化点：使用极速移位定点运算，彻底干掉浮点和复杂乘法
+#include "vector.h"
+#define CHUNK_SIZE 32
+
+#define ALIGN_16 __attribute__((aligned(16)))
+
 #define FAST_CLAMP(x) ((x) < 0 ? 0 : ((x) > 255 ? 255 : (x)))
 
-static void downsample_2x_optimized(camera_fb_t *fb) {
+static void downsample_2x_simd_optimized(camera_fb_t *fb) {
   if (!fb || !preview_buf)
     return;
 
   uint8_t *src = fb->buf;
   uint16_t *dst = (uint16_t *)preview_buf;
-  int src_w = fb->width;
+  int src_w = fb->width; // 320
+
+  // 初始化 SIMD 向量栈
+  VECTOR_STACK_INIT(vec_y, CHUNK_SIZE, DTYPE_INT32);
+  VECTOR_STACK_INIT(vec_u, CHUNK_SIZE, DTYPE_INT32);
+  VECTOR_STACK_INIT(vec_v, CHUNK_SIZE, DTYPE_INT32);
+  VECTOR_STACK_INIT(vec_r, CHUNK_SIZE, DTYPE_INT32);
+  VECTOR_STACK_INIT(vec_g, CHUNK_SIZE, DTYPE_INT32);
+  VECTOR_STACK_INIT(vec_b, CHUNK_SIZE, DTYPE_INT32);
+  VECTOR_STACK_INIT(vec_tmp, CHUNK_SIZE, DTYPE_INT32);
+
+  int32_t *y_ptr = (int32_t *)vec_y.data;
+  int32_t *u_ptr = (int32_t *)vec_u.data;
+  int32_t *v_ptr = (int32_t *)vec_v.data;
 
   for (int y = 0; y < 120; y++) {
     uint8_t *src_row = &src[(y * 2) * src_w * 2];
-    for (int x = 0; x < 160; x++) {
-      int src_idx = (x * 2) * 2;
+    uint16_t *dst_row = &dst[y * 160];
 
-      int y_val = src_row[src_idx];
-      int u_val = src_row[src_idx + 1] - 128;
-      int v_val = src_row[src_idx + 3] - 128;
+    for (int x = 0; x < 160; x += CHUNK_SIZE) {
+      for (int i = 0; i < CHUNK_SIZE; i++) {
+        int src_idx = (x + i) * 2 * 2;
+        y_ptr[i] = src_row[src_idx];
+        u_ptr[i] = (int32_t)src_row[src_idx + 1] - 128;
+        v_ptr[i] = (int32_t)src_row[src_idx + 3] - 128;
+      }
 
-      // 优化点：用加法和移位代替乘法，性能提升 300%
-      int r = y_val + v_val + (v_val >> 2) + (v_val >> 3);
-      int g = y_val - ((u_val >> 2) + (v_val >> 1) + (v_val >> 4));
-      int b = y_val + u_val + (u_val >> 1) + (u_val >> 2);
+      // Y = (Y - 16) * 1164
+      vec_add_scalar(&vec_y, -16, &vec_y);
+      vec_mul_scalar(&vec_y, 1164, &vec_y, 0);
 
-      uint16_t rgb565 = ((FAST_CLAMP(r) & 0xF8) << 8) |
-                        ((FAST_CLAMP(g) & 0xFC) << 3) | (FAST_CLAMP(b) >> 3);
+      // R = Y + 1596 * V
+      vec_mul_scalar(&vec_v, 1596, &vec_r, 0);
+      vec_add(&vec_y, &vec_r, &vec_r);
 
-      dst[y * 160 + x] = (rgb565 << 8) | (rgb565 >> 8);
+      // B = Y + 2018 * U
+      vec_mul_scalar(&vec_u, 2018, &vec_b, 0);
+      vec_add(&vec_y, &vec_b, &vec_b);
+
+      // G = Y - 813 * V - 391 * U
+      vec_mul_scalar(&vec_v, -813, &vec_g, 0);
+      vec_mul_scalar(&vec_u, -391, &vec_tmp, 0);
+      vec_add(&vec_g, &vec_tmp, &vec_g);
+      vec_add(&vec_y, &vec_g, &vec_g);
+
+      // 归一化 (>> 10)
+      int32_t *r_res = (int32_t *)vec_r.data;
+      int32_t *g_res = (int32_t *)vec_g.data;
+      int32_t *b_res = (int32_t *)vec_b.data;
+
+      for (int i = 0; i < CHUNK_SIZE; i++) {
+        // 结果右移 10 位并限制在 0-255
+        int r = FAST_CLAMP(r_res[i] >> 10);
+        int g = FAST_CLAMP(g_res[i] >> 10);
+        int b = FAST_CLAMP(b_res[i] >> 10);
+
+        // swapped
+        uint16_t rgb565 = ((r & 0xF8) << 8) | ((g & 0xFC) << 3) | (b >> 3);
+        dst_row[x + i] = (rgb565 << 8) | (rgb565 >> 8);
+      }
     }
   }
 }
@@ -97,7 +141,7 @@ static void cam_fetch_task(void *arg) {
       continue;
     }
 
-    downsample_2x_optimized(fb); // 使用优化后的函数
+    downsample_2x_simd_optimized(fb); // 使用优化后的函数
 
     if (lvgl_port_lock(0)) {
       if (!src_set) {
@@ -123,7 +167,7 @@ static void cam_take_picture(void) {
   if (!captured_fb)
     return;
 
-  downsample_2x_optimized(captured_fb);
+  downsample_2x_simd_optimized(captured_fb);
 
   if (lvgl_port_lock(0)) {
     // 捕获时同样只需要 invalidate 刷新画面，因为 src 早已绑定过 preview_buf
@@ -264,6 +308,7 @@ static lv_obj_t *create_text_btn(lv_obj_t *parent, const char *text,
 }
 
 static void *page_cam_init(void *args) {
+  // 如果 s_shared_ctx 尚未分配，则分配
   if (s_shared_ctx == NULL) {
     s_shared_ctx =
         heap_caps_calloc(1, sizeof(cam_shared_ctx_t), MALLOC_CAP_INTERNAL);
@@ -273,9 +318,26 @@ static void *page_cam_init(void *args) {
     }
   }
 
+  // 从参数中获取 task_id（假设 args 指向有效的 int）
+  if (args == NULL) {
+    ESP_LOGE(TAG, "Invalid args: task_id not provided");
+    return NULL;
+  }
   s_shared_ctx->task_id = *(int *)args;
 
-  preview_buf = heap_caps_malloc(160 * 120 * 2, MALLOC_CAP_SPIRAM);
+  // 分配预览缓冲区
+  if (preview_buf) {
+    heap_caps_free(preview_buf);
+    preview_buf = NULL;
+  }
+  preview_buf = heap_caps_aligned_alloc(16, 160 * 120 * 2,
+                                        MALLOC_CAP_SPIRAM | MALLOC_CAP_8BIT);
+  if (preview_buf == NULL) {
+    ESP_LOGE(TAG, "Failed to allocate preview buffer");
+    return NULL;
+  }
+
+  // 设置图像描述符
   img_dsc.header.cf = LV_COLOR_FORMAT_RGB565_SWAPPED;
   img_dsc.header.w = 160;
   img_dsc.header.h = 120;
@@ -283,16 +345,24 @@ static void *page_cam_init(void *args) {
   img_dsc.data_size = 160 * 120 * 2;
   img_dsc.data = preview_buf;
 
+  // 初始化按钮和任务
   button_init();
-  xTaskCreate(cam_fetch_task, "cam_fetch", 4096, NULL, 4, &fetch_task_handle);
+  if (fetch_task_handle == NULL) {
+    BaseType_t ret = xTaskCreate(cam_fetch_task, "cam_fetch", 4096, NULL, 4,
+                                 &fetch_task_handle);
+    if (ret != pdPASS) {
+      ESP_LOGE(TAG, "Failed to create fetch task");
+      return NULL;
+    }
+  }
 
-  return NULL;
+  return s_shared_ctx;
 }
 
 static void page_cam_deinit(void *ctx) {
   if (fetch_task_handle) {
     vTaskDelete(fetch_task_handle);
-    fetch_task_handle = NULL; // 修复点：释放后指针置空是个好习惯
+    fetch_task_handle = NULL;
   }
   if (captured_fb) {
     esp_camera_fb_return(captured_fb);
@@ -306,7 +376,7 @@ static void page_cam_deinit(void *ctx) {
     iot_button_delete(btn);
     btn = NULL;
   }
-  img_obj = NULL; // 修复点：退出界面必须清空静态指针，防止下次进入奔溃
+  img_obj = NULL;
 }
 
 /* ===================== 渲染 ===================== */
