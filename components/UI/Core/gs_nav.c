@@ -61,8 +61,15 @@ int gs_nav_push(const gs_page_desc_t *page, void *args) {
   if (lvgl_port_lock(-1)) {
     s_nav.busy = true;
 
-    // 初始化上下文
-    void *ctx = page->init_cb ? page->init_cb(args) : NULL;
+    void *ctx = NULL;
+    if (page->init_cb) {
+      ctx = page->init_cb(args);
+      if (ctx == NULL) {
+        s_nav.busy = false;
+        lvgl_port_unlock();
+        return -1;
+      }
+    }
 
     s_nav.top++;
     s_nav.stack[s_nav.top].desc = page;
@@ -76,7 +83,6 @@ int gs_nav_push(const gs_page_desc_t *page, void *args) {
   }
   return -1;
 }
-
 int gs_nav_pop(void) {
   if (s_nav.top < 0 || s_nav.busy)
     return -1;

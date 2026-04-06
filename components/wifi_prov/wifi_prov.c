@@ -17,6 +17,8 @@
 
 #include "gs_nav.h"
 
+#include "esp_bt.h"
+
 #include "prov_qr.h"
 #include "prov_sec2_gen.h"
 #include "wifi_prov.h"
@@ -27,6 +29,9 @@ static const char *TAG = "wifi_prov";
 
 #define EXAMPLE_PROV_SEC2_USERNAME "wifiprov"
 #define EXAMPLE_PROV_SEC2_PWD "abcd1234"
+
+// 供外部使用的wifi 状态函数
+bool is_wifi_connected = false;
 
 static esp_err_t example_get_sec2_salt(const char **salt, uint16_t *salt_len) {
   ESP_LOGI(TAG, "Development mode: dynamically generating salt");
@@ -104,6 +109,12 @@ static void event_handler(void *arg, esp_event_base_t event_base,
     ESP_LOGI(TAG, "Connected with IP Address:" IPSTR,
              IP2STR(&event->ip_info.ip));
     xEventGroupSetBits(wifi_event_group, WIFI_CONNECTED_EVENT);
+    is_wifi_connected = true;
+
+    // mamager 无法deinti 掉这个，首先配网后直接硬件deinit
+    esp_bt_controller_disable();
+    esp_bt_controller_deinit();
+
   } else if (event_base == PROTOCOMM_TRANSPORT_BLE_EVENT) {
     switch (event_id) {
     case PROTOCOMM_TRANSPORT_BLE_CONNECTED:
@@ -289,10 +300,13 @@ void qr_render_task(void *arg) {
   vTaskDelete(NULL);
 }
 
+bool provisioned = false;
 static void provisioning_task(void *arg) {
   // 检测是否已配网
-  bool provisioned = false;
+
   ESP_ERROR_CHECK(wifi_prov_mgr_is_provisioned(&provisioned));
+
+  is_wifi_connected = provisioned;
 
   if (!provisioned) {
     ESP_LOGI(TAG, "Starting provisioning");
@@ -345,11 +359,14 @@ static void provisioning_task(void *arg) {
 
     ESP_ERROR_CHECK(esp_event_handler_register(WIFI_EVENT, ESP_EVENT_ANY_ID,
                                                &event_handler, NULL));
+
     wifi_init_sta();
     xEventGroupWaitBits(wifi_event_group, WIFI_CONNECTED_EVENT, true, true,
                         portMAX_DELAY);
   }
   ESP_LOGI(TAG, "Provisioning task completed");
+  ESP_LOGI(TAG, "Already provisioned, starting Wi-Fi STA");
+
   // 任务结束，自行删除
   vTaskDelete(NULL);
 }
@@ -393,7 +410,7 @@ esp_err_t wifi_prov_init(void) {
             },
         .scheme = wifi_prov_scheme_ble,
         .app_event_handler = wifi_prov_event_handler,
-        .scheme_event_handler = WIFI_PROV_SCHEME_BLE_EVENT_HANDLER_FREE_BTDM};
+        .scheme_event_handler = WIFI_PROV_EVENT_HANDLER_NONE};
     ESP_ERROR_CHECK(wifi_prov_mgr_init(config));
 
     initialized = true;

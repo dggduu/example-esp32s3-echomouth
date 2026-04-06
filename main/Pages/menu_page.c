@@ -9,6 +9,7 @@
 extern const gs_page_desc_t page_chat;
 extern const gs_page_desc_t page_cam;
 extern const gs_page_desc_t page_todo;
+extern const gs_page_desc_t page_ota;
 
 static void menu_item_click_cb(lv_event_t *e) {
   const char *txt = (const char *)lv_event_get_user_data(e);
@@ -25,8 +26,6 @@ static void menu_item_click_cb(lv_event_t *e) {
     int params = 4;
     gs_nav_push_async(&page_cam, &params);
   } else if (strcmp(txt, "SETTING") == 0) {
-    gs_nav_pop();
-  } else if (strcmp(txt, "OTA") == 0) {
     gs_nav_pop();
   }
 }
@@ -62,10 +61,9 @@ static lv_obj_t *menu_page_render(lv_obj_t *parent, void *ctx) {
                {LV_SYMBOL_CALL, "聊天", "CHAT"},
                {LV_SYMBOL_LIST, "ToDoList", "TODO"},
                {LV_SYMBOL_PLAY, "相机", "CAM"},
-               {LV_SYMBOL_SETTINGS, "设置", "SETTING"},
-               {LV_SYMBOL_UPLOAD, "OTA", "OTA"}};
+               {LV_SYMBOL_SETTINGS, "设置", "SETTING"}};
 
-  for (int i = 0; i < 6; i++) {
+  for (int i = 0; i < 5; i++) {
     lv_obj_t *btn = lv_list_add_btn(list, items[i].icon, items[i].name);
 
     lv_obj_set_style_bg_color(btn, lv_color_white(), 0);

@@ -16,12 +16,66 @@
 
 #include "s3_helper.h"
 
+#include "button_gpio.h"
+#include "iot_button.h"
+
 #include "img_stack.h"
 
+#define OTA_ENRTY_BUTTON_GPIO GPIO_NUM_0
+static button_handle_t btn;
+static bool s_ota_mode_active = false;
 extern EventGroupHandle_t wifi_event_group;
 extern const int WIFI_CONNECTED_EVENT;
 
+typedef enum {
+  BOOT_MODE_NORMAL = 0,
+  BOOT_MODE_OTA,
+} boot_mode_t;
+
+static boot_mode_t s_boot_mode = BOOT_MODE_NORMAL;
+
 static const char *TAG = "MAIN";
+
+extern const gs_page_desc_t page_ota;
+
+static bool s_ota_triggered = false;
+static void btn_long_cb(void *arg, void *usr_data) {
+  s_boot_mode = BOOT_MODE_OTA;
+}
+
+static void ota_button_init(void) {
+  const button_config_t btn_cfg = {0};
+  const button_gpio_config_t btn_gpio_cfg = {
+      .gpio_num = OTA_ENRTY_BUTTON_GPIO,
+      .active_level = 0,
+      .enable_power_save = false,
+  };
+
+  esp_err_t ret = iot_button_new_gpio_device(&btn_cfg, &btn_gpio_cfg, &btn);
+  if (ret != ESP_OK) {
+    ESP_LOGE(TAG, "Failed to create button");
+    return;
+  }
+
+  iot_button_register_cb(btn, BUTTON_LONG_PRESS_START, NULL,
+                         (button_cb_t)btn_long_cb, NULL);
+}
+
+static boot_mode_t detect_boot_mode(void) {
+  s_boot_mode = BOOT_MODE_NORMAL;
+
+  ota_button_init();
+
+  for (int i = 0; i < 500; i++) {
+    if (s_boot_mode == BOOT_MODE_OTA) {
+      break;
+    }
+    vTaskDelay(pdMS_TO_TICKS(10));
+  }
+  iot_button_delete(btn);
+
+  return s_boot_mode;
+}
 
 static lv_obj_t *splash_page(lv_obj_t *parent, void *ctx) {
   lv_obj_t *cont = lv_obj_create(parent);
@@ -92,29 +146,10 @@ void query_mdns_host(const char *host_name) {
   }
 }
 
-static void global_service_init() {
-
-  lv_obj_t *container = lv_scr_act();
-  gs_nav_init(container);
-  xTaskCreate(gui_flsuh_task, "gui", 12 * 1024, NULL, 4, NULL);
-  // 加一个 Splash
-  gs_nav_push(&page_splash, NULL);
-
-  wifi_prov_init();
-
-  xEventGroupWaitBits(wifi_event_group, WIFI_CONNECTED_EVENT, true, true,
-                      portMAX_DELAY);
-  sntp_helper_init();
-  sntp_helper_set_timezone("CST-8");
-  sntp_helper_time("ntp.aliyun.com", 5000);
-
-  init_mdns("esp32-s3");
-  vTaskDelay(pdMS_TO_TICKS(1000));
-  query_mdns_host("aobara-pc");
-
-  // 启动s3服务
-  uploader_task_start();
-}
+#include "esp_bt.h"
+#include "nvs.h"
+#include "nvs_flash.h"
+#include "nvs_helper.h"
 
 extern const gs_page_desc_t page_cam;
 
@@ -125,20 +160,51 @@ void app_main(void) {
   pca9557_init();
   bsp_lvgl_start();
   bsp_littlefs_mount();
-  bsp_codec_init();
-  bsp_camera_init();
 
-  my_ui_theme_init();
-  http_helper_init();
-  // 全局初始化
-  global_service_init();
-  // 初始化图片上传调用互斥量
-  img_stack_init();
+  // my_ui_theme_init();
+  lv_obj_t *container = lv_scr_act();
+  gs_nav_init(container);
 
-  if (lvgl_port_lock(-1)) {
-    extern const gs_page_desc_t page_main;
+  xTaskCreate(gui_flsuh_task, "gui", 12 * 1024, NULL, 4, NULL);
+  gs_nav_push(&page_splash, NULL);
+  boot_mode_t mode = detect_boot_mode();
+
+  if (mode == BOOT_MODE_OTA) {
+    ESP_LOGI(TAG, "Booting into OTA mode");
     gs_nav_pop();
-    gs_nav_push_async(&page_main, NULL);
-    lvgl_port_unlock();
+    gs_nav_push(&page_ota, NULL);
+    return;
+  } else {
+
+    ESP_LOGI(TAG, "Booting into NORMAL mode");
+
+    wifi_prov_init();
+
+    xEventGroupWaitBits(wifi_event_group, WIFI_CONNECTED_EVENT, true, true,
+                        portMAX_DELAY);
+    sntp_helper_init();
+    sntp_helper_set_timezone("CST-8");
+    sntp_helper_time("ntp.aliyun.com", 5000);
+
+    init_mdns("esp32-s3");
+    vTaskDelay(pdMS_TO_TICKS(1000));
+    query_mdns_host("aobara-pc");
+
+    // 启动s3服务
+    uploader_task_start();
+
+    // esp_bt_controller_mem_release(ESP_BT_MODE_CLASSIC_BT);
+    http_helper_init();
+    bsp_codec_init();
+    bsp_camera_init();
+    // 初始化图片上传调用互斥量
+    img_stack_init();
+
+    if (lvgl_port_lock(-1)) {
+      extern const gs_page_desc_t page_main;
+      gs_nav_pop();
+      gs_nav_push_async(&page_main, NULL);
+      lvgl_port_unlock();
+    }
   }
 }

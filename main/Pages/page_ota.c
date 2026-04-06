@@ -7,6 +7,9 @@
 #include <stdio.h>
 #include <stdlib.h>
 
+#include "esp_bt.h"
+
+#include "freertos/event_groups.h"
 
 static const char *TAG = "PAGE_OTA";
 
@@ -55,9 +58,16 @@ void page_ota_notify_status(const char *status_msg, int state) {
 }
 
 static void *page_ota_init(void *args) {
+  ESP_LOGI(TAG, "jump to page ota,initing....");
+
+  ESP_LOGI(TAG, "ble not busy, start ota comp");
+
   page_ota_ctx_t *ctx = (page_ota_ctx_t *)calloc(1, sizeof(page_ota_ctx_t));
-  if (!ctx)
+
+  if (!ctx) {
+    gs_nav_pop();
     return NULL;
+  }
 
   // 启动 OTA 后台任务
   if (!ota_backend_init()) {
@@ -65,6 +75,8 @@ static void *page_ota_init(void *args) {
     free(ctx);
     return NULL;
   }
+
+  ESP_LOGI(TAG, "page ota init end");
 
   s_ota_ui_ctx = ctx;
   return ctx;
@@ -78,11 +90,11 @@ static lv_obj_t *page_ota_render(lv_obj_t *parent, void *ctx_ptr) {
   lv_obj_t *page = lv_obj_create(parent);
   lv_obj_set_size(page, LV_PCT(100), LV_PCT(100));
 
-  ctx->btn_exit = lv_btn_create(page);
-  lv_obj_align(ctx->btn_exit, LV_ALIGN_TOP_LEFT, 10, 10);
-  lv_obj_add_event_cb(ctx->btn_exit, btn_exit_event_cb, LV_EVENT_CLICKED, NULL);
-  lv_obj_t *lbl_btn = lv_label_create(ctx->btn_exit);
-  lv_label_set_text(lbl_btn, "Exit");
+  // ctx->btn_exit = lv_btn_create(page);
+  // lv_obj_align(ctx->btn_exit, LV_ALIGN_TOP_LEFT, 10, 10);
+  // lv_obj_add_event_cb(ctx->btn_exit, btn_exit_event_cb, LV_EVENT_CLICKED,
+  // NULL); lv_obj_t *lbl_btn = lv_label_create(ctx->btn_exit);
+  // lv_label_set_text(lbl_btn, "Exit");
 
   lv_obj_t *lbl_title = lv_label_create(page);
   lv_label_set_text(lbl_title, "Firmware Update");
@@ -110,7 +122,6 @@ static lv_obj_t *page_ota_render(lv_obj_t *parent, void *ctx_ptr) {
 static void page_ota_deinit(void *ctx_ptr) {
   // 停止 OTA 后台任务，释放资源
   ota_backend_deinit();
-
   s_ota_ui_ctx = NULL;
   free(ctx_ptr);
 }
