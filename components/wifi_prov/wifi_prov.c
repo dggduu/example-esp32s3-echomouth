@@ -112,8 +112,8 @@ static void event_handler(void *arg, esp_event_base_t event_base,
     is_wifi_connected = true;
 
     // mamager 无法deinti 掉这个，首先配网后直接硬件deinit
-    esp_bt_controller_disable();
-    esp_bt_controller_deinit();
+    // esp_bt_controller_disable();
+    // esp_bt_controller_deinit();
 
   } else if (event_base == PROTOCOMM_TRANSPORT_BLE_EVENT) {
     switch (event_id) {
@@ -410,7 +410,7 @@ esp_err_t wifi_prov_init(void) {
             },
         .scheme = wifi_prov_scheme_ble,
         .app_event_handler = wifi_prov_event_handler,
-        .scheme_event_handler = WIFI_PROV_EVENT_HANDLER_NONE};
+        .scheme_event_handler = WIFI_PROV_SCHEME_BLE_EVENT_HANDLER_FREE_BTDM};
     ESP_ERROR_CHECK(wifi_prov_mgr_init(config));
 
     initialized = true;

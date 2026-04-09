@@ -24,12 +24,16 @@
 
 #include "driver/sdmmc_host.h"
 // #include "esp_spiffs.h"
-#include "esp_vfs_fat.h"
+// #include "esp_vfs_fat.h"
 #include "sdmmc_cmd.h"
 
 #include "esp_lv_adapter.h"
 
 #include "esp_littlefs.h"
+
+#ifdef __cplusplus
+extern "C" {
+#endif
 
 /******************************************************************************/
 /***************************  I2C ↓ *******************************************/
@@ -190,3 +194,7 @@ esp_err_t bsp_codec_volume_set(int volume, int *volume_set);
 
 /*********************    音频 ↑   *************************/
 /***********************************************************/
+
+#ifdef __cplusplus
+}
+#endif

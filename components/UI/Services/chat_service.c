@@ -4,6 +4,8 @@
 #include <stdio.h>
 #include <string.h>
 
+#include "freertos/FreeRTOS.h"
+
 static chat_fifo_t s_window;
 static chat_state_t s_state = CHAT_HOME;
 
@@ -60,13 +62,11 @@ void chat_enter_history(uint32_t last_id, uint8_t direction) {
   request_history(last_id, direction);
 }
 
-
 void chat_send_text(const char *text) {
   uint8_t buf[512];
   size_t len = encode_data_packet(buf, text);
   net_ws_send(buf, len);
 }
-
 
 static void apply_batch(void) {
   chat_fifo_clear(&s_window);
@@ -114,8 +114,6 @@ void chat_service_loop(void) {
       s_batch_count = 0;
     } else if (pkt.type == TYPE_DATA) {
 
-      send_ack(TYPE_DATA, pkt.epoch);
-
       if (s_batch_count < CHAT_WINDOW_SIZE) {
         s_batch[s_batch_count].msg_id = pkt.msg_id;
         s_batch[s_batch_count].timestamp = pkt.timestamp;
@@ -126,6 +124,10 @@ void chat_service_loop(void) {
 
         s_batch_count++;
       }
+      vTaskDelay(pdMS_TO_TICKS(40));
+      send_ack(TYPE_DATA, pkt.epoch);
+
+      // esp_rom_delay_us();
     } else if (pkt.type == TYPE_END) {
 
       send_ack(TYPE_END, pkt.epoch);

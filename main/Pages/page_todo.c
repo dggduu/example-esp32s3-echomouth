@@ -98,7 +98,7 @@ static bool fetch_tasks(page_todo_ctx_t *ctx) {
     return true;
   }
 
-  ctx->has_more = (count == MAX_TASKS); // 简单的分页判断逻辑补充
+  ctx->has_more = (count == MAX_TASKS);
 
   for (int i = 0; i < count && i < MAX_TASKS; i++) {
     cJSON *item = cJSON_GetArrayItem(tasks, i);
@@ -127,9 +127,8 @@ static void start_task(int task_id) {
   snprintf(path, sizeof(path), "/device/%d/start", task_id);
   time_t now = time(NULL);
 
-  // 彻底解决 %lld 格式化陷阱，使用 cJSON 序列化
   cJSON *root = cJSON_CreateObject();
-  cJSON_AddNumberToObject(root, "deviceId", s_ctx.deviceId); // 修复硬编码
+  cJSON_AddNumberToObject(root, "deviceId", s_ctx.deviceId);
   cJSON_AddNumberToObject(root, "startTime", (double)now);
 
   char *body = cJSON_PrintUnformatted(root);
@@ -293,9 +292,8 @@ static void *page_todo_init(void *args) {
   s_ctx.page = 0;
   s_ctx.has_more = true;
 
-  // 工业级警告：这里的前提是 app_main 已调用 nvs_flash_init()
   if (nvs_helper_get_i32("storage", "device_id", &s_ctx.deviceId) != ESP_OK) {
-    s_ctx.deviceId = 2; // 降级处理：如果没有取到，提供默认值防止奔溃
+    s_ctx.deviceId = 1; 
     ESP_LOGW(TAG, "Failed to get parent_id, defaulting to 1");
   }
   return &s_ctx;

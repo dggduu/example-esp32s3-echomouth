@@ -491,7 +491,7 @@ void bsp_camera_init(void) {
   config.pixel_format = PIXFORMAT_YUV422;
   config.frame_size = FRAMESIZE_QVGA;
   config.jpeg_quality = 12;
-  config.fb_count = 2;
+  config.fb_count = 1;
   config.fb_location = CAMERA_FB_IN_PSRAM;
   config.grab_mode = CAMERA_GRAB_LATEST;
 
