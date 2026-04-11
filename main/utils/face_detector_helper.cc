@@ -12,7 +12,6 @@ static bool is_processing = false;
 
 // 封装推理核心逻辑
 static void task_process_ai_single_shot(void *arg) {
-  // 实例化放在堆上，减小栈压力
   auto *detector = new HumanFaceDetectMSR01(0.3F, 0.3F, 10, 0.3F);
 
   while (true) {
@@ -70,3 +69,14 @@ extern "C" bool face_detector_helper_trigger_detection(void) {
 }
 
 extern "C" bool face_detector_helper_is_busy(void) { return is_processing; }
+
+static int64_t last_face_detected_us = 0;
+
+extern "C" void face_detector_helper_update_timestamp(void) {
+  last_face_detected_us = esp_timer_get_time();
+}
+
+extern "C" bool face_detector_helper_has_recent_face(int max_age_ms) {
+  int64_t now = esp_timer_get_time();
+  return (now - last_face_detected_us) < (max_age_ms * 1000);
+}

@@ -25,6 +25,9 @@ bool face_detector_helper_trigger_detection(void);
  */
 bool face_detector_helper_is_busy(void);
 
+bool face_detector_helper_has_recent_face(int max_age_ms);
+void face_detector_helper_update_timestamp(void);
+
 #ifdef __cplusplus
 }
 #endif
