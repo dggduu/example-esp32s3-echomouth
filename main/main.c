@@ -149,19 +149,52 @@ void query_mdns_host(const char *host_name) {
 }
 
 #include "esp_bt.h"
+#include "http_client_helper.h"
+#include "monitor_mamager.h"
+#include "net_adapter.h"
 #include "nvs.h"
 #include "nvs_flash.h"
 #include "nvs_helper.h"
-
-extern const gs_page_desc_t page_cam;
-
-#include "http_client_helper.h"
-
+#include "protocol.h"
 #include "time_test_helper.h"
+
+#include "task_manager.h"
 
 void debug_init_nvs_value() {
   nvs_helper_set_i32("storage", "device_id", 3);
   nvs_helper_set_i32("storage", "parent_id", 1);
+}
+
+void global_socket_init(void) {
+  int32_t did = -1, pid = -1;
+  nvs_helper_get_i32("storage", "device_id", &did);
+  nvs_helper_get_i32("storage", "parent_id", &pid);
+
+  if (did == -1 || pid == -1) {
+    gs_toast_show("无法获取用户绑定状态", GS_TOAST_FAILED);
+    return;
+  }
+
+  char server_ip[32] = {0};
+  if (!get_mdns_server_ip(server_ip, sizeof(server_ip))) {
+    gs_toast_show("无法获取服务器地址", GS_TOAST_FAILED);
+    return;
+  }
+
+  static net_config_t global_cfg;
+  strncpy(global_cfg.host, server_ip, sizeof(global_cfg.host) - 1);
+  global_cfg.port = 3000;
+  snprintf(global_cfg.user_id, sizeof(global_cfg.user_id), "%ld", pid);
+  snprintf(global_cfg.device_id, sizeof(global_cfg.device_id), "%ld", did);
+
+  net_ws_connect(&global_cfg);
+  net_start_reconnect_task(&global_cfg);
+  protocol_switch_mode(DEVICE_MODE_HOME);
+  protocol_send_mode_switch(DEVICE_MODE_HOME);
+
+  gs_toast_show("成功创建全局Socket连接", GS_TOAST_SUCCESS);
+
+  task_manager_init(did);
 }
 
 void app_main(void) {
@@ -198,6 +231,13 @@ void app_main(void) {
     sntp_helper_set_timezone("CST-8");
     sntp_helper_time("ntp.aliyun.com", 5000);
 
+    // debug point
+    if (IS_DEBUG_MODE) {
+      debug_init_nvs_value();
+      test_nvs_info();
+      DUMP_MEM_INFO("TEST");
+    }
+
     init_mdns("esp32-s3");
     vTaskDelay(pdMS_TO_TICKS(1000));
     query_mdns_host("aobara-pc");
@@ -208,19 +248,19 @@ void app_main(void) {
     uploader_task_start();
 
     http_helper_init();
-
+    // 初始化全局socket 流
+    global_socket_init();
     // 初始化图片上传调用互斥量
     img_queue_init();
 
-    // debug point
+    monitor_task_start();
+
     if (IS_DEBUG_MODE) {
-      debug_init_nvs_value();
-      check_nvs_info();
-      DUMP_MEM_INFO("TEST");
+      test_task_monitor();
     }
 
     extern const gs_page_desc_t page_main;
-    gs_nav_pop();
-    gs_nav_push_async(&page_main, NULL);
+    // gs_nav_pop();
+    gs_nav_push(&page_main, NULL);
   }
 }

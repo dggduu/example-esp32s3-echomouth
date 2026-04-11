@@ -199,3 +199,21 @@ bool http_post_json(const char *path, const char *json) {
   return perform_request(HTTP_METHOD_POST, path, "application/json", json,
                          strlen(json), NULL, 0);
 }
+
+bool get_mdns_server_ip(char *ip_buf, size_t buf_len) {
+  if (!s_mutex)
+    s_mutex = xSemaphoreCreateMutex();
+  xSemaphoreTake(s_mutex, portMAX_DELAY);
+  bool ok = false;
+  if (s_cached_ip[0] != 0) {
+    strncpy(ip_buf, s_cached_ip, buf_len);
+    ok = true;
+  } else {
+    if (resolve_server_ip(s_cached_ip, sizeof(s_cached_ip))) {
+      strncpy(ip_buf, s_cached_ip, buf_len);
+      ok = true;
+    }
+  }
+  xSemaphoreGive(s_mutex);
+  return ok;
+}

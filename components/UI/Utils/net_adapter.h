@@ -1,3 +1,4 @@
+// net_adapter.h
 #ifndef NET_ADAPTER_H
 #define NET_ADAPTER_H
 
@@ -6,35 +7,29 @@
 #include <stdint.h>
 
 typedef struct {
-  const char *host;    // 如 "ubuntu-s3.local"
-  uint16_t port;       // 如 3000
-  const char *user_id; // 用于后续协议层握手
-  const char *device_id;
+  char host[64];
+  int port;
+  char user_id[16];
+  char device_id[16];
 } net_config_t;
 
-/**
- * @brief 阻塞式连接，但通过配置驱动
- */
-void net_ws_connect(const net_config_t *cfg);
+typedef enum {
+  NET_STATUS_CONNECTED,
+  NET_STATUS_DISCONNECTED,
+  NET_STATUS_RECONNECTING
+} net_status_t;
 
-/**
- * @brief 发送原始字节流
- */
-void net_ws_send(const uint8_t *data, size_t len);
+typedef void (*net_status_callback_t)(net_status_t status, const char *msg);
 
-/**
- * @brief 非阻塞式接收，适配 chat_service_loop 的 while 循环
- */
-bool net_ws_fetch_rx(uint8_t *out_buf, size_t *out_len);
-
-/**
- * @brief 检查物理链路是否连通
- */
+void net_set_status_callback(net_status_callback_t cb);
+void net_reset_status_callback(void); // 恢复默认 Toast 回调
 bool net_is_connected(void);
-
-/**
- * @brief 主动断开
- */
+void net_ws_connect(const net_config_t *cfg);
+void net_ws_send(const uint8_t *data, size_t len);
+bool net_ws_fetch_rx(uint8_t *out_buf, size_t *out_len);
 void net_ws_disconnect(void);
+void net_start_reconnect_task(const net_config_t *cfg);
+
+void net_start_global_receiver_task(void);
 
 #endif

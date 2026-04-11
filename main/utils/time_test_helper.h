@@ -6,6 +6,8 @@
 #include "esp_timer.h"
 #include <stdio.h>
 
+#include "monitor_mamager.h"
+#include "task_manager.h"
 // 颜色定义，方便在终端区分
 #define LOG_CLR_RESET "\033[0m"
 #define LOG_CLR_CYAN "\033[0;36m"
@@ -54,7 +56,7 @@
  * @brief 打印当前NVS 中的did 与pid
  *
  */
-void check_nvs_info(void) {
+void test_nvs_info(void) {
   // 监控读取前的内存状态
   DUMP_MEM_INFO("NVS_READ_START");
 
@@ -74,6 +76,11 @@ void check_nvs_info(void) {
 
   // 监控读取后的内存状态
   DUMP_MEM_INFO("NVS_READ_END");
+}
+
+void test_task_monitor() {
+  int32_t task_id = task_manager_get_active_id();
+  printf(LOG_CLR_PURPLE "[DEBUG]:test task moinitr,task id:%ld\n", task_id);
 }
 
 #endif
