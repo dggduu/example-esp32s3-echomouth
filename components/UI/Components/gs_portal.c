@@ -312,3 +312,18 @@ void gs_portal_toast_show(gs_toast_config_t cfg) {
       (cfg.stay_time > 0) ? cfg.stay_time : PORTAL_TOAST_STAY_DEFAULT;
   _portal_fsm_start(_toast_render, _toast_render_step, anim_in, 0, true, stay);
 }
+
+void gs_alert_show(const char *title, const char *msg) {
+  gs_alert_config_t cfg = GS_ALERT_DEFAULT_CONFIG();
+  cfg.title = title;
+  cfg.msg = msg;
+  gs_portal_alert_show(cfg);
+}
+
+/* 便捷 Toast：只传消息和类型，其他全为默认值 */
+void gs_toast_show(const char *msg, gs_toast_type_t type) {
+  gs_toast_config_t cfg = GS_TOAST_DEFAULT_CONFIG();
+  cfg.msg = msg;
+  cfg.type = type;
+  gs_portal_toast_show(cfg);
+}

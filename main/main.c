@@ -17,9 +17,11 @@
 #include "s3_helper.h"
 
 #include "button_gpio.h"
+#include "gs_portal.h"
+#include "img_queue.h"
 #include "iot_button.h"
 
-#include "img_stack.h"
+#include "context.h"
 
 #define OTA_ENRTY_BUTTON_GPIO GPIO_NUM_0
 static button_handle_t btn;
@@ -66,7 +68,7 @@ static boot_mode_t detect_boot_mode(void) {
 
   ota_button_init();
 
-  for (int i = 0; i < 500; i++) {
+  for (int i = 0; i < 100; i++) {
     if (s_boot_mode == BOOT_MODE_OTA) {
       break;
     }
@@ -157,6 +159,11 @@ extern const gs_page_desc_t page_cam;
 
 #include "time_test_helper.h"
 
+void debug_init_nvs_value() {
+  nvs_helper_set_i32("storage", "device_id", 3);
+  nvs_helper_set_i32("storage", "parent_id", 1);
+}
+
 void app_main(void) {
   bsp_i2c_init();
   pca9557_init();
@@ -186,6 +193,7 @@ void app_main(void) {
 
     xEventGroupWaitBits(wifi_event_group, WIFI_CONNECTED_EVENT, true, true,
                         portMAX_DELAY);
+    gs_toast_show("联网成功", GS_TOAST_SUCCESS);
     sntp_helper_init();
     sntp_helper_set_timezone("CST-8");
     sntp_helper_time("ntp.aliyun.com", 5000);
@@ -202,13 +210,17 @@ void app_main(void) {
     http_helper_init();
 
     // 初始化图片上传调用互斥量
-    img_stack_init();
+    img_queue_init();
 
-    if (lvgl_port_lock(-1)) {
-      extern const gs_page_desc_t page_main;
-      gs_nav_pop();
-      gs_nav_push_async(&page_main, NULL);
-      lvgl_port_unlock();
+    // debug point
+    if (IS_DEBUG_MODE) {
+      debug_init_nvs_value();
+      check_nvs_info();
+      DUMP_MEM_INFO("TEST");
     }
+
+    extern const gs_page_desc_t page_main;
+    gs_nav_pop();
+    gs_nav_push_async(&page_main, NULL);
   }
 }

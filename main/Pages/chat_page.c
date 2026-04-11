@@ -18,7 +18,6 @@ static void *chat_init_cb(void *args) {
 
   if (!ctx)
     return NULL;
-
   ctx->net_cfg.host = "10.113.233.106";
   ctx->net_cfg.port = 3000;
   ctx->net_cfg.user_id = "1";

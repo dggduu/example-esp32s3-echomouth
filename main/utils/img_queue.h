@@ -8,6 +8,11 @@
 extern "C" {
 #endif
 
+typedef enum {
+  IMG_TYPE_MONITOR = 0, // 自动监控定时检测
+  IMG_TYPE_MANUAL = 1,  // 手动拍照任务完成
+} img_job_type_t;
+
 /**
  * @brief 上传优先级
  */
@@ -33,7 +38,7 @@ typedef struct {
   int task_id;             // 关联的任务 ID，0 表示无关联
   img_priority_t priority; // 优先级
   uint8_t retry_count;     // 当前重试次数（内部使用）
-
+  img_job_type_t type;
   // 回调与上下文
   img_upload_callback_t on_complete; // 完成回调（成功或最终失败后调用）
   void *user_data;                   // 传递给回调的用户数据

@@ -52,6 +52,29 @@ void gs_portal_alert_show(gs_alert_config_t cfg);
 /* 显示 Toast */
 void gs_portal_toast_show(gs_toast_config_t cfg);
 
+/* ========== 默认配置宏 ========== */
+#define GS_ALERT_DEFAULT_CONFIG()                                              \
+  (gs_alert_config_t) {                                                        \
+    .title = NULL, .msg = NULL, .win_w = 280, /* 默认宽度 */                   \
+        .win_h = 160,                         /* 默认高度 */                   \
+        .anim_in_time = 200,                  /* 默认进入动画时长 200ms */     \
+        .anim_out_time = 200,                 /* 默认退出动画时长 200ms */     \
+        .ok_cb = NULL, .cancel_cb = NULL, .user_data = NULL                    \
+  }
+
+#define GS_TOAST_DEFAULT_CONFIG()                                              \
+  (gs_toast_config_t) {                                                        \
+    .msg = NULL, .type = GS_TOAST_INFO, /* 默认信息类型 */                     \
+        .stay_time = 2000,              /* 默认停留 2000ms */                  \
+        .anim_in_time = 200,            /* 默认进入动画 200ms */               \
+        .anim_out_time = 200,           /* 默认退出动画 200ms */               \
+        .click_cb = NULL, .user_data = NULL                                    \
+  }
+
+void gs_alert_show(const char *title, const char *msg);
+
+void gs_toast_show(const char *msg, gs_toast_type_t type);
+
 #ifdef __cplusplus
 }
 #endif

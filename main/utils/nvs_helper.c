@@ -3,7 +3,6 @@
 #include "nvs.h"
 #include "nvs_flash.h"
 
-
 static const char *TAG = "NVS_HELPER";
 
 esp_err_t nvs_helper_init(void) {
@@ -94,4 +93,37 @@ esp_err_t nvs_helper_erase_key(const char *name_space, const char *key) {
 
   nvs_close(handle);
   return err;
+}
+
+// 便捷接口
+int32_t nvs_helper_get_did() {
+  nvs_handle_t handle;
+  int32_t output = -1;
+  esp_err_t err = nvs_open("storage", NVS_READONLY, &handle);
+  if (err != ESP_OK)
+    return err;
+
+  err = nvs_get_i32(handle, "device_id", &output);
+  nvs_close(handle);
+
+  if (err) {
+    return -1;
+  }
+  return output;
+}
+
+int32_t nvs_helper_get_pid() {
+  nvs_handle_t handle;
+  int32_t output = -1;
+  esp_err_t err = nvs_open("storage", NVS_READONLY, &handle);
+  if (err != ESP_OK)
+    return err;
+
+  err = nvs_get_i32(handle, "parent_id", &output);
+  nvs_close(handle);
+
+  if (err) {
+    return -1;
+  }
+  return output;
 }

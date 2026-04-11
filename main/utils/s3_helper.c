@@ -18,24 +18,22 @@ static const char *TAG = "S3_helper";
 #define MAX_RETRY_LIMIT 5
 #define RETRY_BACKOFF_MS 5000
 
-// 前向声明
 static void rewrite_mdns_url(const char *original_url, char *out_url,
-                             size_t out_len, const char *ip);
+                             size_t out_len, const char *ip) {
+  const char *mdns_host = "aobara-pc.local";
+  const char *pos = strstr(original_url, mdns_host);
 
-// 上传任务类型
-typedef enum {
-  UPLOAD_TYPE_MONITOR = 0, // 定时监控，调用 /device/image
-  UPLOAD_TYPE_MANUAL = 1   // 手动拍照，调用 /device/image/result
-} upload_type_t;
-
-// 扩展 img_job_t 中的 user_data，用于传递额外参数
-typedef struct {
-  upload_type_t type; // 上传类型
-  int32_t device_id;
-  int32_t task_id;
-  // 手动任务可能需要回调
-  void *callback_ctx; // 指向 cam_shared_ctx_t
-} upload_user_ctx_t;
+  if (pos && ip && strlen(ip) > 0) {
+    size_t prefix_len = pos - original_url;
+    // 替换地址
+    snprintf(out_url, out_len, "%.*s%s%s", (int)prefix_len, original_url, ip,
+             pos + strlen(mdns_host));
+    ESP_LOGI(TAG, "已接收预签名URL，拼接后的URL:%s", out_url);
+  } else {
+    // 如果没找到域名或 IP 无效，原样拷贝
+    strlcpy(out_url, original_url, out_len);
+  }
+}
 
 static void uploader_task(void *arg) {
   while (1) {
@@ -45,11 +43,9 @@ static void uploader_task(void *arg) {
       continue;
     }
 
-    // 重试超限处理
     if (job.retry_count >= MAX_RETRY_LIMIT) {
       ESP_LOGE(TAG, "Job %s reached max retries (%d). Dropping.", job.path,
                MAX_RETRY_LIMIT);
-      // 调用失败回调
       if (job.on_complete) {
         job.on_complete(false, NULL, job.user_data);
       }
@@ -58,58 +54,46 @@ static void uploader_task(void *arg) {
       continue;
     }
 
-    // 解析用户上下文
-    upload_user_ctx_t *ctx = (upload_user_ctx_t *)job.user_data;
-    if (!ctx) {
-      ESP_LOGE(TAG, "Missing user context, dropping job");
-      remove(job.path);
-      img_queue_commit();
-      continue;
-    }
-
-    int32_t deviceId = ctx->device_id;
-    int32_t taskId = ctx->task_id;
-    upload_type_t type = ctx->type;
+    int32_t device_id = DEVICE_ID;
+    nvs_helper_get_i32("storage", "device_id", &device_id);
+    int32_t task_id = job.task_id;
 
     // 步骤 A: 获取预签名 URL
     char url[128];
-    snprintf(url, sizeof(url), "/device/%ld/upload-url", deviceId);
-
+    snprintf(url, sizeof(url), "/device/%ld/upload-url", device_id);
     char resp[1024];
     if (!http_get_json(url, resp, sizeof(resp))) {
-      goto task_fail_handle;
+      goto fail_retry;
     }
 
     cJSON *root = cJSON_Parse(resp);
     if (!root)
-      goto task_fail_handle;
-
+      goto fail_retry;
     cJSON *url_obj = cJSON_GetObjectItem(root, "uploadUrl");
     cJSON *key_obj = cJSON_GetObjectItem(root, "imageKey");
     if (!url_obj || !key_obj) {
       cJSON_Delete(root);
-      goto task_fail_handle;
+      goto fail_retry;
     }
 
-    char *rawUploadUrl = url_obj->valuestring;
-    char *imageKey = key_obj->valuestring;
+    char *raw_upload_url = url_obj->valuestring;
+    char *image_key = key_obj->valuestring;
 
     char ip[32] = {0};
-    char finalUploadUrl[1024];
+    char final_upload_url[1024];
     if (resolve_server_ip(ip, sizeof(ip))) {
-      rewrite_mdns_url(rawUploadUrl, finalUploadUrl, sizeof(finalUploadUrl),
-                       ip);
-      ESP_LOGI(TAG, "Rewritten URL: %s", finalUploadUrl);
+      rewrite_mdns_url(raw_upload_url, final_upload_url,
+                       sizeof(final_upload_url), ip);
     } else {
-      strlcpy(finalUploadUrl, rawUploadUrl, sizeof(finalUploadUrl));
+      strlcpy(final_upload_url, raw_upload_url, sizeof(final_upload_url));
     }
 
-    // 步骤 B: 读取文件并上传到 S3
+    // 步骤 B: 读取并上传文件
     FILE *f = fopen(job.path, "rb");
     if (!f) {
       ESP_LOGE(TAG, "File missing: %s", job.path);
       cJSON_Delete(root);
-      img_queue_commit(); // 文件不存在，直接丢弃
+      img_queue_commit();
       continue;
     }
 
@@ -125,48 +109,41 @@ static void uploader_task(void *arg) {
       vTaskDelay(pdMS_TO_TICKS(RETRY_BACKOFF_MS));
       continue;
     }
-
     fread(buf, 1, size, f);
     fclose(f);
 
-    bool put_success = http_put_binary(finalUploadUrl, buf, size);
+    bool put_success = http_put_binary(final_upload_url, buf, size);
     heap_caps_free(buf);
-
     if (!put_success) {
       cJSON_Delete(root);
-      goto task_fail_handle;
+      goto fail_retry;
     }
 
-    // 步骤 C: 根据类型调用不同的服务器接口
+    // 步骤 C: 调用服务器接口
     bool post_success = false;
-    char tickId[32] = {0};
+    char tick_id[32] = {0};
 
-    if (type == UPLOAD_TYPE_MONITOR) {
-      // 定时监控：调用 /device/image
+    if (job.type == IMG_TYPE_MONITOR) {
       cJSON *post = cJSON_CreateObject();
-      cJSON_AddNumberToObject(post, "deviceId", deviceId);
-      if (taskId > 0) {
-        cJSON_AddNumberToObject(post, "taskId", taskId);
-      }
-      cJSON_AddStringToObject(post, "imageKey", imageKey);
-      // 使用当前时间作为 timestamp，同时也是 tickId 的基础
+      cJSON_AddNumberToObject(post, "deviceId", device_id);
+      if (task_id > 0)
+        cJSON_AddNumberToObject(post, "taskId", task_id);
+      cJSON_AddStringToObject(post, "imageKey", image_key);
       int64_t now_ms = esp_timer_get_time() / 1000;
       cJSON_AddNumberToObject(post, "timestamp", now_ms);
-      snprintf(tickId, sizeof(tickId), "%lld", now_ms);
+      snprintf(tick_id, sizeof(tick_id), "%lld", now_ms);
 
       char *json_str = cJSON_PrintUnformatted(post);
       post_success = http_post_json("/device/image", json_str);
       cJSON_Delete(post);
       free(json_str);
     } else {
-      // 手动拍照：调用 /device/image/result
       cJSON *post = cJSON_CreateObject();
-      cJSON_AddNumberToObject(post, "deviceId", deviceId);
-      if (taskId > 0) {
-        cJSON_AddNumberToObject(post, "taskId", taskId);
-      }
-      cJSON_AddStringToObject(post, "imageKey", imageKey);
-      cJSON_AddNumberToObject(post, "timestamp", esp_timer_get_time() / 1000);
+      cJSON_AddNumberToObject(post, "deviceId", device_id);
+      if (task_id > 0)
+        cJSON_AddNumberToObject(post, "taskId", task_id);
+      cJSON_AddStringToObject(post, "imageKey", image_key);
+      // cJSON_AddNumberToObject(post, "timestamp", (double)time(NULL));
 
       char *json_str = cJSON_PrintUnformatted(post);
       post_success = http_post_json("/device/image/result", json_str);
@@ -175,36 +152,24 @@ static void uploader_task(void *arg) {
     }
 
     cJSON_Delete(root);
+    if (!post_success)
+      goto fail_retry;
 
-    if (!post_success) {
-      goto task_fail_handle;
-    }
-
-    // 成功：处理回调
-    if (type == UPLOAD_TYPE_MONITOR) {
-      // 对于监控任务，可能需要轮询 interval，但这里我们简单认为成功即可
-      // 你可以将 tickId 通过某种方式传给监控任务进行轮询
-      // 这里为了简化，我们只调用 on_complete 并传递 imageKey
-      if (job.on_complete) {
-        job.on_complete(true, imageKey, job.user_data);
-      }
-    } else {
-      // 手动任务：直接成功
-      if (job.on_complete) {
-        job.on_complete(true, imageKey, job.user_data);
-      }
-    }
-
+    // 成功处理
     remove(job.path);
     img_queue_commit();
-    ESP_LOGI(TAG, "Job success, type: %d", type);
+    if (job.on_complete) {
+      const char *cb_data =
+          (job.type == IMG_TYPE_MONITOR) ? tick_id : image_key;
+      job.on_complete(true, cb_data, job.user_data);
+    }
+    ESP_LOGI(TAG, "Job success, type: %d", job.type);
     continue;
 
-  task_fail_handle:
+  fail_retry:
     job.retry_count++;
     img_queue_update_retry(job.retry_count);
-    ESP_LOGW(TAG, "Job failed, retry count: %d/%d", job.retry_count,
-             MAX_RETRY_LIMIT);
+    ESP_LOGW(TAG, "Job failed, retry %d/%d", job.retry_count, MAX_RETRY_LIMIT);
     vTaskDelay(pdMS_TO_TICKS(RETRY_BACKOFF_MS));
   }
 }

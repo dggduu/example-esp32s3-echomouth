@@ -13,12 +13,12 @@ idf_component_register(SRCS
 
                         "utils/http_client_helper.c"
                         "utils/s3_helper.c"
-                        "utils/img_stack.c"
+                        # "utils/img_stack.c"
                         "utils/ota_backend.c"
                         "utils/nvs_helper.c"
                         "utils/face_detector_helper.cc"
                         "utils/task_manager.c"
-                        "utils/monintor_mamager.c"
+                        "utils/monitor_mamager.c"
                         "utils/img_queue.c"
 
                         INCLUDE_DIRS "." "utils" "pages" 

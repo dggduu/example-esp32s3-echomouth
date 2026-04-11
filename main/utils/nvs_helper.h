@@ -39,4 +39,8 @@ esp_err_t nvs_helper_get_string(const char *name_space, const char *key,
 
 esp_err_t nvs_helper_erase_key(const char *name_space, const char *key);
 
+int32_t nvs_helper_get_did();
+
+int32_t nvs_helper_get_pid();
+
 #endif

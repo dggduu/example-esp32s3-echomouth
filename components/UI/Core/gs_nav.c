@@ -27,7 +27,7 @@ static void render_page_internal(int idx) {
   if (idx < 0 || idx > s_nav.top || !s_nav.container) {
     return;
   }
-
+  lv_anim_del(NULL, NULL);
   lv_obj_clean(s_nav.container);
 
   if (s_nav.stack[idx].desc && s_nav.stack[idx].desc->render_cb) {

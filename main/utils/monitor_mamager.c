@@ -1,3 +1,4 @@
+#include "monitor_mamager.h"
 #include "cJSON.h"
 #include "esp_camera.h"
 #include "esp_jpeg_enc.h"
@@ -9,12 +10,13 @@
 #include "freertos/task.h"
 #include "http_client_helper.h"
 #include "img_queue.h"
-#include "monitor_task.h"
 #include "nvs_helper.h"
 #include "task_manager.h"
 #include <stdio.h>
 #include <string.h>
 #include <sys/stat.h>
+
+#include "s3_helper.h"
 
 #define TAG "MONITOR"
 #define MONITOR_STACK_SIZE 8192
@@ -44,6 +46,10 @@ static SemaphoreHandle_t s_interval_sem = NULL;   // 上传回调完成信号
 static int s_new_interval_sec = INTERVAL_MAX_SEC; // 回调填充的新间隔
 static bool s_upload_success = false;             // 上传是否成功（用于回调）
 static char s_tick_id[32] = {0};                  // 回调填充的 tickId
+
+static SemaphoreHandle_t s_pause_sem = NULL; // 用于挂起任务
+static bool s_paused = false;
+static SemaphoreHandle_t s_state_mutex = NULL;
 
 static monitor_state_t s_state = MONITOR_STATE_IDLE;
 static int64_t s_next_wake_time_us = 0;
@@ -252,6 +258,16 @@ static void monitor_task_func(void *arg) {
       esp_timer_get_time() + (int64_t)s_current_interval_sec * 1000000;
 
   while (1) {
+    xSemaphoreTake(s_state_mutex, portMAX_DELAY);
+    if (s_paused) {
+      xSemaphoreGive(s_state_mutex);
+      // 等待恢复信号
+      xSemaphoreTake(s_pause_sem, portMAX_DELAY);
+      // 恢复后重新获取状态
+      continue;
+    }
+    xSemaphoreGive(s_state_mutex);
+
     int32_t active_task = task_manager_get_active_id();
 
     if (active_task == 0) {
@@ -356,6 +372,13 @@ void monitor_task_start(void) {
   if (s_interval_sem == NULL) {
     s_interval_sem = xSemaphoreCreateBinary();
   }
+  if (s_pause_sem == NULL) {
+    s_pause_sem = xSemaphoreCreateBinary();
+  }
+
+  if (s_state_mutex == NULL) {
+    s_state_mutex = xSemaphoreCreateBinary();
+  }
   xTaskCreate(monitor_task_func, "monitor", MONITOR_STACK_SIZE, NULL, 5,
               &monitor_task_handle);
 }
@@ -365,4 +388,23 @@ void monitor_task_reset_timer(void) {
   s_face_wait_start_us = esp_timer_get_time();
   s_current_interval_sec = INTERVAL_MAX_SEC;
   ESP_LOGI(TAG, "Timer reset, will capture immediately upon face detection");
+}
+
+void monitor_task_pause(void) {
+  xSemaphoreTake(s_state_mutex, portMAX_DELAY);
+  if (!s_paused) {
+    s_paused = true;
+    ESP_LOGI(TAG, "Monitor task paused");
+  }
+  xSemaphoreGive(s_state_mutex);
+}
+
+void monitor_task_resume(void) {
+  xSemaphoreTake(s_state_mutex, portMAX_DELAY);
+  if (s_paused) {
+    s_paused = false;
+    ESP_LOGI(TAG, "Monitor task resumed");
+    xSemaphoreGive(s_pause_sem); // 唤醒挂起的任务
+  }
+  xSemaphoreGive(s_state_mutex);
 }
