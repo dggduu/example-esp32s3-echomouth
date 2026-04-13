@@ -77,6 +77,8 @@ void print_protocol_packet(const protocol_packet_t *pkt) {
     printf("  [NOTIFY] sender   : %s\n",
            pkt->notify_sender == 1 ? "child" : "parent");
     printf("  [NOTIFY] preview  : %s\n", pkt->notify_preview);
+  } else if (pkt->type == TYPE_REASONING) {
+    printf("  [REASONING] content: %s\n", pkt->reasoning_content);
   } else {
     if (pkt->payload_len > 0 && pkt->payload) {
       printf("  payload text : ");

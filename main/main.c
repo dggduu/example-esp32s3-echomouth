@@ -105,6 +105,30 @@ static lv_obj_t *splash_page(lv_obj_t *parent, void *ctx) {
 const gs_page_desc_t page_splash = {
     .init_cb = NULL, .render_cb = splash_page, .deinit_cb = NULL};
 
+static void toast_async_cb(void *arg) {
+  const char *text = (const char *)arg;
+  gs_toast_show(text, GS_TOAST_FAILED);
+  free((void *)text);
+}
+
+static void show_toast_async(const char *msg) {
+  lv_async_call(toast_async_cb, strdup(msg));
+}
+
+static void on_reasoning_received(const char *msg) { show_toast_async(msg); }
+
+static const char *notify_msg = "新消息";
+
+static void on_notify_received(uint32_t msg_id, uint8_t sender,
+                               const char *preview) {
+
+  gs_toast_config_t cfg = {.msg = notify_msg,
+                           .type = GS_TOAST_INFO,
+                           .stay_time = 3000,
+                           .click_cb = NULL};
+  gs_portal_toast_show(cfg);
+}
+
 void gui_flsuh_task(void *param) {
   while (1) {
     if (lvgl_port_lock(-1)) {
@@ -197,7 +221,8 @@ void global_socket_init(void) {
   // 初始化网络适配器
   net_adapter_init(&global_cfg);
 
-  // chat_exit_chat();
+  chat_service_register_reasoning_cb(on_reasoning_received);
+  chat_service_register_notify_cb(on_notify_received);
 
   gs_toast_show("全局Socket连接已启动", GS_TOAST_SUCCESS);
 

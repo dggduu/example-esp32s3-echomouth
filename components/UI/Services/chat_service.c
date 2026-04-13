@@ -23,6 +23,12 @@ extern device_mode_t g_current_mode;
 static chat_notify_cb_t s_notify_cb = NULL;
 
 void chat_service_register_notify_cb(chat_notify_cb_t cb) { s_notify_cb = cb; }
+
+static chat_reasoning_cb_t s_reasoning_cb = NULL;
+
+void chat_service_register_reasoning_cb(chat_reasoning_cb_t cb) {
+  s_reasoning_cb = cb;
+}
 /* ---------- 内部函数 ---------- */
 static void add_message_to_window(uint32_t msg_id, uint32_t timestamp,
                                   uint8_t sender, const char *text) {
@@ -97,24 +103,38 @@ void chat_service_loop(void) {
 }
 
 void chat_service_handle_packet(protocol_packet_t *pkt) {
+  device_mode_t mode = protocol_get_mode();
   switch (pkt->type) {
   case TYPE_DATA:
-    handle_data_packet(pkt);
+    // 聊天模式下才处理 DATA（添加到窗口）
+    if (mode == DEVICE_MODE_CHAT_LIVE || mode == DEVICE_MODE_CHAT_HISTORY) {
+      handle_data_packet(pkt);
+    } else {
+      // home 模式下的 DATA 通常不会收到，但若收到可忽略或显示 toast
+      ESP_LOGW(TAG, "DATA ignored in home mode");
+    }
     break;
   case TYPE_SYN:
-    ESP_LOGI(TAG, "SYN epoch=%d", pkt->epoch);
-    break;
   case TYPE_END:
-    ESP_LOGI(TAG, "END epoch=%d", pkt->epoch);
+    // 这些控制包只在聊天模式下有意义，但 ACK 已回复，无需额外动作
+    ESP_LOGI(TAG, "Control packet %d, epoch=%d", pkt->type, pkt->epoch);
+    break;
+  case TYPE_REASONING:
+    // reasoning 包，通过回调显示 toast（无论当前模式，服务器只在 home
+    // 模式发送）
+    if (s_reasoning_cb) {
+      s_reasoning_cb(pkt->reasoning_content);
+    }
     break;
   case TYPE_NOTIFY:
-    ESP_LOGI(TAG, "NOTIFY: msg_id=%lu, sender=%d, preview=%s",
-             pkt->notify_msg_id, pkt->notify_sender, pkt->notify_preview);
+    // 新消息通知，通过回调显示 toast（无论模式）
     if (s_notify_cb) {
       s_notify_cb(pkt->notify_msg_id, pkt->notify_sender, pkt->notify_preview);
     }
+    // 若当前处于聊天模式，也可以额外触发窗口刷新（但服务器会主动推送数据，不需要）
     break;
   default:
+    ESP_LOGD(TAG, "Unhandled packet type 0x%02X", pkt->type);
     break;
   }
 }
@@ -195,6 +215,5 @@ void chat_send_text(const char *text) {
 }
 
 void chat_show_new_msg_toast(void) {
-  // 可在此实现 toast 提示
   ESP_LOGI(TAG, "New message arrived (toast)");
 }

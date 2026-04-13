@@ -53,6 +53,7 @@ typedef struct {
   uint32_t notify_msg_id;
   uint8_t notify_sender;
   char notify_preview[64];
+  char reasoning_content[256];
 } protocol_packet_t;
 
 // 模式管理（线程安全）

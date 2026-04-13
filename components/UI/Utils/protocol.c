@@ -89,6 +89,14 @@ bool decode_packet(const uint8_t *raw, size_t len, protocol_packet_t *out) {
         out->notify_preview[preview_len] = '\0';
       }
     }
+  } else if (out->type == TYPE_REASONING) {
+    size_t text_len = out->payload_len;
+    if (text_len > 0 && text_len < sizeof(out->reasoning_content)) {
+      memcpy(out->reasoning_content, out->payload, text_len);
+      out->reasoning_content[text_len] = '\0';
+    } else {
+      out->reasoning_content[0] = '\0';
+    }
   }
   return true;
 }

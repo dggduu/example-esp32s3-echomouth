@@ -168,11 +168,10 @@ static void net_rx_task(void *pvParameters) {
           if (rx_idx == total_len) {
             protocol_packet_t pkt;
             if (decode_packet(packet_buf, total_len, &pkt)) {
-
-              ESP_LOGI(TAG, "packet reved type:%d", pkt.type);
+              ESP_LOGI(TAG, "packet received type:%d", pkt.type);
               print_protocol_packet(&pkt);
 
-              // 非ACK包立即回复ACK
+              // 非 ACK 包立即回复 ACK
               if (pkt.type != TYPE_ACK) {
                 uint8_t ack_buf[32];
                 int ack_len =
@@ -184,30 +183,13 @@ static void net_rx_task(void *pvParameters) {
                 }
               }
 
-              device_mode_t mode = protocol_get_mode();
-              // 分发处理
-              if (pkt.type == TYPE_REASONING && mode == DEVICE_MODE_HOME) {
-                char preview[64] = {0};
-                size_t copy_len = pkt.payload_len < sizeof(preview) - 1
-                                      ? pkt.payload_len
-                                      : sizeof(preview) - 1;
-                memcpy(preview, pkt.payload, copy_len);
-                gs_toast_show(preview, GS_TOAST_INFO);
-              } else if (pkt.type == TYPE_NOTIFY && mode == DEVICE_MODE_HOME) {
-                if (pkt.payload_len >= 5) {
-                  // 可提取msg_id供跳转
-                  uint32_t msg_id;
-                  memcpy(&msg_id, pkt.payload, 4);
-                  chat_show_new_msg_toast();
-                }
-              } else if (mode == DEVICE_MODE_CHAT_LIVE ||
-                         mode == DEVICE_MODE_CHAT_HISTORY) {
-                chat_service_handle_packet(&pkt);
-              }
+              // 统一交给聊天服务处理（内部根据模式决定是显示 toast
+              // 还是更新窗口）
+              chat_service_handle_packet(&pkt);
             } else {
-              ESP_LOGE(TAG, "CRC Error");
-
-              print_protocol_packet(&pkt);
+              ESP_LOGE(TAG, "CRC Error or invalid packet");
+              // 可打印原始十六进制辅助调试
+              ESP_LOG_BUFFER_HEX("RX_ERR", packet_buf, total_len);
             }
             rx_idx = 0;
           } else if (rx_idx > total_len || rx_idx >= sizeof(packet_buf)) {

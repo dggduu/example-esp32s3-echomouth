@@ -59,4 +59,7 @@ void chat_show_new_msg_toast(void);
 typedef void (*chat_notify_cb_t)(uint32_t msg_id, uint8_t sender,
                                  const char *preview);
 void chat_service_register_notify_cb(chat_notify_cb_t cb);
+
+typedef void (*chat_reasoning_cb_t)(const char *message);
+void chat_service_register_reasoning_cb(chat_reasoning_cb_t cb);
 #endif

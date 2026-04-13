@@ -104,23 +104,6 @@ static void on_chat_dirty() { lv_async_call(async_render_window, NULL); }
 
 static void down_btn_cb(lv_event_t *e) { chat_enter_live(); }
 
-static void on_notify_received(uint32_t msg_id, uint8_t sender,
-                               const char *preview) {
-  // 构造提示文本
-  char toast_msg[128];
-  const char *sender_name = (sender == 1) ? "Child" : "Parent";
-  snprintf(toast_msg, sizeof(toast_msg), "New message from %s: %s", sender_name,
-           preview);
-
-  gs_toast_config_t cfg = {
-      .msg = toast_msg,
-      .type = GS_TOAST_INFO,
-      .stay_time = 3000,
-      .click_cb = NULL // 可选点击后进入实时模式
-  };
-  gs_portal_toast_show(cfg);
-}
-
 lv_obj_t *chat_comp_create(lv_obj_t *parent) {
   chat_service_init();
 
@@ -216,7 +199,6 @@ lv_obj_t *chat_comp_create(lv_obj_t *parent) {
   lv_obj_align_to(cand_panel, kb, LV_ALIGN_OUT_TOP_MID, 0, 0);
 
   chat_service_register_render_cb(on_chat_dirty);
-  chat_service_register_notify_cb(on_notify_received);
   // chat_enter_live();
   return s_root;
 }
