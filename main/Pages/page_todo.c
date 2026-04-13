@@ -13,6 +13,8 @@ static page_todo_ctx_t s_ctx;
 
 /* ================= 样式辅助函数 (保持 Element Plus 风格) ================= */
 
+LV_FONT_DECLARE(chinese_font_14px);
+
 static lv_color_t get_status_color(const char *status) {
   if (strcmp(status, "active") == 0)
     return lv_color_hex(0xECF5FF);
@@ -46,14 +48,13 @@ static void on_start_click(lv_event_t *e) {
   int task_id = s_ctx.tasks[index].id;
 
   if (task_manager_start(task_id)) {
-    gs_portal_toast_show((gs_toast_config_t){.msg = "Task started successfully",
-                                             .type = GS_TOAST_SUCCESS});
+    gs_toast_show(" 任务开始", GS_TOAST_SUCCESS);
     load_and_render(); // 刷新列表以更新状态
   } else {
     // 如果失败，可能是网络问题或已有任务在运行
-    gs_portal_toast_show((gs_toast_config_t){
-        .msg = "Fail: Another task is running", .type = GS_TOAST_FAILED});
-  }
+    gs_toast_show("请先完成一开始的任务",GS_TOAST_FAILED
+  });
+}
 }
 
 static void on_complete_click(lv_event_t *e) {
@@ -61,13 +62,13 @@ static void on_complete_click(lv_event_t *e) {
   int task_id = s_ctx.tasks[index].id;
 
   if (task_manager_complete(task_id)) {
-    gs_portal_toast_show((gs_toast_config_t){.msg = "Task marked as complete",
-                                             .type = GS_TOAST_SUCCESS});
-    load_and_render();
-  } else {
-    gs_portal_toast_show((gs_toast_config_t){.msg = "Complete request failed",
-                                             .type = GS_TOAST_FAILED});
-  }
+    gs_toast_show("任务成功标记完成",GS_TOAST_SUCCESS
+  });
+  load_and_render();
+}
+else {
+  gs_toast_show("任务提交失败，请重试", GS_TOAST_FAILED);
+}
 }
 
 /* ================= UI 渲染逻辑 ================= */
@@ -115,7 +116,7 @@ static void render_list(page_todo_ctx_t *ctx) {
 
     lv_obj_t *lbl_title = lv_label_create(header);
     lv_label_set_text(lbl_title, item_data->title);
-    lv_obj_set_style_text_font(lbl_title, &lv_font_montserrat_14, 0);
+    lv_obj_set_style_text_font(lbl_title, &chinese_font_14px 0);
 
     lv_obj_t *lbl_status = lv_label_create(header);
     lv_label_set_text(lbl_status, item_data->status);
@@ -142,13 +143,13 @@ static void render_list(page_todo_ctx_t *ctx) {
     if (strcmp(item_data->status, "pending") == 0) {
       lv_obj_t *btn = lv_btn_create(btn_area);
       lv_obj_set_style_bg_color(btn, lv_color_hex(0x409EFF), 0);
-      lv_label_set_text(lv_label_create(btn), "Start");
+      lv_label_set_text(lv_label_create(btn), "开始任务");
       lv_obj_add_event_cb(btn, on_start_click, LV_EVENT_CLICKED,
                           (void *)(intptr_t)i);
     } else if (strcmp(item_data->status, "active") == 0) {
       lv_obj_t *btn = lv_btn_create(btn_area);
       lv_obj_set_style_bg_color(btn, lv_color_hex(0x67C23A), 0);
-      lv_label_set_text(lv_label_create(btn), "Complete");
+      lv_label_set_text(lv_label_create(btn), "提交报告");
       lv_obj_add_event_cb(btn, on_complete_click, LV_EVENT_CLICKED,
                           (void *)(intptr_t)i);
     }
