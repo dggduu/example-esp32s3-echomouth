@@ -2,6 +2,8 @@
 #include "gs_nav.h"
 #include <string.h>
 
+#include "time_test_helper.h"
+
 #define MENU_PRIMARY_COLOR lv_color_hex(0x409eff)
 #define MENU_BG_COLOR lv_color_hex(0xf0f0f0)
 #define MENU_TEXT_COLOR lv_color_hex(0x333333)
@@ -13,18 +15,19 @@ extern const gs_page_desc_t page_ota;
 
 static void menu_item_click_cb(lv_event_t *e) {
   const char *txt = (const char *)lv_event_get_user_data(e);
+  TEST_MEM_INFO("MENU");
   if (!txt)
     return;
   if (strcmp(txt, "HOME") == 0) {
     gs_nav_pop();
   } else if (strcmp(txt, "CHAT") == 0) {
-    gs_nav_push_async(&page_chat, NULL);
+    gs_nav_push(&page_chat, NULL);
   } else if (strcmp(txt, "TODO") == 0) {
     int device_id = 1;
     gs_nav_push_async(&page_todo, &device_id);
   } else if (strcmp(txt, "CAM") == 0) {
     int params = 4;
-    gs_nav_push_async(&page_cam, &params);
+    gs_nav_push(&page_cam, &params);
   }
 }
 

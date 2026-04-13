@@ -7,46 +7,54 @@
 #include "net_adapter.h"
 #include "protocol.h"
 
+#include "esp_heap_caps.h"
+
 static const char *TAG = "GS_CHAT_PAGE";
 
 typedef struct {
-  // 可保留一些页面状态，如网络配置（不再管理连接）
+  bool is_active;
 } chat_page_ctx_t;
 
 // 聊天页面自定义网络状态回调
 static void chat_status_callback(net_status_t status, const char *msg) {
   switch (status) {
   case NET_STATUS_CONNECTED:
-    // 重连成功后刷新聊天窗口
-    chat_enter_live();
-    gs_toast_show("聊天已连接", GS_TOAST_SUCCESS);
+    gs_toast_show(msg, GS_TOAST_SUCCESS);
     break;
   case NET_STATUS_DISCONNECTED:
-    gs_toast_show("聊天连接断开", GS_TOAST_FAILED);
+    gs_toast_show(msg, GS_TOAST_FAILED);
     break;
   case NET_STATUS_RECONNECTING:
-    gs_toast_show("正在重连聊天...", GS_TOAST_INFO);
+    gs_toast_show(msg, GS_TOAST_INFO);
+    break;
+  case NET_STATUS_CONNECTING:
+    // 可以忽略或显示“连接中”
+    break;
+  default:
     break;
   }
 }
 
 static void *chat_init_cb(void *args) {
-  chat_page_ctx_t *ctx = calloc(1, sizeof(chat_page_ctx_t));
-  if (!ctx)
+  ESP_LOGI("CHAT", "Initialising chat context...");
+
+  chat_page_ctx_t *ctx = heap_caps_calloc(1, sizeof(chat_page_ctx_t),
+                                          MALLOC_CAP_SPIRAM | MALLOC_CAP_8BIT);
+
+  if (ctx == NULL) {
+    ESP_LOGE(
+        "CHAT",
+        "CRITICAL: Failed to allocate context! Free Internal: %d, PSRAM: %d",
+        heap_caps_get_free_size(MALLOC_CAP_INTERNAL),
+        heap_caps_get_free_size(MALLOC_CAP_SPIRAM));
     return NULL;
-
-  // 设置页面专用网络状态回调
-  net_set_status_callback(chat_status_callback);
-
-  // 切换至聊天模式
-  if (protocol_get_mode() != DEVICE_MODE_CHAT_LIVE) {
-    protocol_send_mode_switch(DEVICE_MODE_CHAT_LIVE);
-    protocol_switch_mode(DEVICE_MODE_CHAT_LIVE);
   }
 
-  // 初始化聊天服务并请求最新消息
+  net_set_status_callback(chat_status_callback);
+
   chat_enter_live();
 
+  ESP_LOGI("CHAT", "Context allocated at %p", ctx); // 打印指针地址确认分配成功
   return ctx;
 }
 
@@ -60,11 +68,11 @@ static void chat_update_cb(void *ctx) {
 
 static void chat_deinit_cb(void *ctx) {
   // 退出聊天页面，切换回 HOME 模式
-  if (protocol_get_mode() != DEVICE_MODE_HOME) {
-    protocol_send_mode_switch(DEVICE_MODE_HOME);
-    protocol_switch_mode(DEVICE_MODE_HOME);
-  }
-
+  // if (protocol_get_mode() != DEVICE_MODE_HOME) {
+  //   protocol_send_mode_switch(DEVICE_MODE_HOME);
+  //   protocol_switch_mode(DEVICE_MODE_HOME);
+  // }
+  chat_exit_chat();
   // 恢复默认网络状态回调（Toast）
   net_reset_status_callback();
 

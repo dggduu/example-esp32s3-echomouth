@@ -20,6 +20,7 @@ idf_component_register(SRCS
                         "utils/task_manager.c"
                         "utils/monitor_mamager.c"
                         "utils/img_queue.c"
+                        "utils/time_test_helper.c"
 
                         INCLUDE_DIRS "." "utils" "pages" 
                         # EMBED_TXTFILES ${project_dir}/assets/private.pem

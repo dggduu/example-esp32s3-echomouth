@@ -6,6 +6,8 @@
 #include "esp_timer.h"
 #include <stdio.h>
 
+#include "nvs_helper.h"
+
 #include "monitor_mamager.h"
 #include "task_manager.h"
 // 颜色定义，方便在终端区分
@@ -17,7 +19,7 @@
  * @brief 打印当前内存快照
  * 区分内部RAM（DMA安全）和外部PSRAM
  */
-#define DUMP_MEM_INFO(tag)                                                     \
+#define TEST_MEM_INFO(tag)                                                     \
   do {                                                                         \
     size_t int_free = heap_caps_get_free_size(MALLOC_CAP_INTERNAL);            \
     size_t ext_free = heap_caps_get_free_size(MALLOC_CAP_SPIRAM);              \
@@ -56,31 +58,8 @@
  * @brief 打印当前NVS 中的did 与pid
  *
  */
-void test_nvs_info(void) {
-  // 监控读取前的内存状态
-  DUMP_MEM_INFO("NVS_READ_START");
+void test_nvs_info(void);
 
-  int32_t did = 0;
-  int32_t pid = 0;
-
-  // 获取 DID
-  did = nvs_helper_get_did();
-  // 获取 PID
-  pid = nvs_helper_get_pid();
-
-  if (did == -1 || pid == -1) {
-    ESP_LOGE("NVS", "Failed to fetch DID/PID from NVS! Using defaults.");
-  } else {
-    ESP_LOGI("NVS", "Successfully loaded -> DID: %ld | PID: %ld", did, pid);
-  }
-
-  // 监控读取后的内存状态
-  DUMP_MEM_INFO("NVS_READ_END");
-}
-
-void test_task_monitor() {
-  int32_t task_id = task_manager_get_active_id();
-  printf(LOG_CLR_PURPLE "[DEBUG]:test task moinitr,task id:%ld\n", task_id);
-}
+void test_task_monitor();
 
 #endif

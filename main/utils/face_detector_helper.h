@@ -18,8 +18,7 @@ bool face_detector_helper_init(void);
  * @brief 触发单次检测推理
  * @return 任务通知是否发送成功
  */
-bool face_detector_helper_trigger_detection(void);
-
+bool face_detector_helper_trigger_detection(uint32_t timeout_ms);
 /**
  * @brief 获取推理是否正在忙碌 (可选)
  */

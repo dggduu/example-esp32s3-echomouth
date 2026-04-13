@@ -287,8 +287,8 @@ static lv_disp_t *bsp_display_lcd_init(void) {
               .mirror_y = false, // y方向是否镜像
           },
       .flags = {
-          .buff_dma = false,   // 是否使用DMA 注意：dma与spiram不能同时为true
-          .buff_spiram = true, // 是否使用PSRAM 注意：dma与spiram不能同时为true
+          .buff_dma = true,     // 是否使用DMA 注意：dma与spiram不能同时为true
+          .buff_spiram = false, // 是否使用PSRAM 注意：dma与spiram不能同时为true
       }};
 
   return lvgl_port_add_disp(&disp_cfg);
@@ -493,7 +493,7 @@ void bsp_camera_init(void) {
   config.jpeg_quality = 12;
   config.fb_count = 1;
   config.fb_location = CAMERA_FB_IN_PSRAM;
-  config.grab_mode = CAMERA_GRAB_LATEST;
+  config.grab_mode = CAMERA_GRAB_WHEN_EMPTY;
 
   // camera init
   esp_err_t err = esp_camera_init(&config); // 配置上面定义的参数

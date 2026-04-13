@@ -397,23 +397,6 @@ static void *page_cam_init(void *args) {
     }
   }
 
-  // // 如果 s_shared_ctx 尚未分配，则分配
-  // if (s_shared_ctx == NULL) {
-  //   s_shared_ctx =
-  //       heap_caps_calloc(1, sizeof(cam_shared_ctx_t), MALLOC_CAP_INTERNAL);
-  //   if (s_shared_ctx == NULL) {
-  //     ESP_LOGE(TAG, "Failed to allocate shared context");
-  //     return NULL;
-  //   }
-  // }
-
-  // // 从参数中获取 task_id（假设 args 指向有效的 int）
-  // if (args == NULL) {
-  //   ESP_LOGE(TAG, "Invalid args: task_id not provided");
-  //   return NULL;
-  // }
-  // s_shared_ctx->task_id = *(int *)args;
-
   // 分配预览缓冲区
   if (preview_buf) {
     heap_caps_free(preview_buf);
@@ -437,7 +420,7 @@ static void *page_cam_init(void *args) {
   // 初始化按钮和任务
   button_init();
   if (fetch_task_handle == NULL) {
-    BaseType_t ret = xTaskCreate(cam_fetch_task, "cam_fetch", 4096, NULL, 4,
+    BaseType_t ret = xTaskCreate(cam_fetch_task, "cam_fetch", 2048, NULL, 4,
                                  &fetch_task_handle);
     if (ret != pdPASS) {
       ESP_LOGE(TAG, "Failed to create fetch task");

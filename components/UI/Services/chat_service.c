@@ -1,157 +1,200 @@
-// chat_service.c
 #include "chat_service.h"
+#include "esp_log.h"
 #include "freertos/FreeRTOS.h"
-#include "freertos/queue.h"
-#include "freertos/task.h"
+#include "freertos/semphr.h"
 #include "net_adapter.h"
-#include "protocol.h"
-#include <stdio.h>
+#include <stdlib.h>
 #include <string.h>
+#include <time.h>
 
+static const char *TAG = "CHAT_SERVICE";
 
-/* ---------- 静态变量 ---------- */
-static chat_fifo_t s_window;
-static chat_state_t s_state = CHAT_HOME;
+static msg_t s_window[CHAT_WINDOW_SIZE];
+static int s_window_count = 0;
+static int s_window_head = 0; // 最新消息插入位置
+static bool s_dirty = false;
+static SemaphoreHandle_t s_fifo_mutex = NULL;
 
-static uint32_t s_latest_server_msg_id = 0;
-static uint32_t s_current_window_newest = 0;
-static bool s_window_dirty = false;
+static chat_render_cb_t s_render_cb = NULL;
 
-/* 批次接收缓存 */
-static msg_t s_batch[CHAT_WINDOW_SIZE];
-static int s_batch_count = 0;
+// 全局模式（定义在 protocol.c 中，声明为 extern）
+extern device_mode_t g_current_mode;
 
-/* ACK 相关 */
-static uint8_t s_current_epoch = 0;
+static chat_notify_cb_t s_notify_cb = NULL;
 
-/* 队列与任务 */
-static QueueHandle_t g_packet_queue = NULL;
-static TaskHandle_t g_chat_task_handle = NULL;
+void chat_service_register_notify_cb(chat_notify_cb_t cb) { s_notify_cb = cb; }
+/* ---------- 内部函数 ---------- */
+static void add_message_to_window(uint32_t msg_id, uint32_t timestamp,
+                                  uint8_t sender, const char *text) {
+  if (!text || strlen(text) == 0)
+    return;
+  xSemaphoreTake(s_fifo_mutex, portMAX_DELAY);
+  msg_t *slot = &s_window[s_window_head];
+  slot->msg_id = msg_id;
+  slot->timestamp = timestamp;
+  slot->sender = sender;
+  strncpy(slot->text, text, sizeof(slot->text) - 1);
+  slot->text[sizeof(slot->text) - 1] = '\0';
 
-/* ---------- 内部函数声明 ---------- */
-static void send_ack(uint8_t ack_type, uint8_t epoch);
-static void apply_batch(void);
-static void chat_service_task(void *param);
+  s_window_head = (s_window_head + 1) % CHAT_WINDOW_SIZE;
+  if (s_window_count < CHAT_WINDOW_SIZE)
+    s_window_count++;
+  s_dirty = true;
+  xSemaphoreGive(s_fifo_mutex);
+  ESP_LOGI(TAG, "Window updated: %s", text);
 
-/* ---------- 初始化 ---------- */
+  // 触发 UI 刷新回调
+  if (s_render_cb) {
+    s_render_cb();
+  }
+}
+
+static void handle_data_packet(protocol_packet_t *pkt) {
+  ESP_LOGI(TAG, "DATA: msg_id=%lu, part=%d/%d, sender=%d, payload_len=%d",
+           pkt->msg_id, pkt->part_idx, pkt->total_parts, pkt->sender,
+           pkt->payload_len);
+  if (pkt->msg_id == 0) {
+    ESP_LOGW(TAG, "DATA with msg_id=0, ignoring");
+    return;
+  }
+
+  // 提取文本内容（跳过 DATA 头 7 字节）
+  size_t content_len = pkt->payload_len - 7;
+  if (content_len == 0) {
+    ESP_LOGW(TAG, "DATA with empty content, ignoring");
+    return;
+  }
+
+  char *content = malloc(content_len + 1);
+  if (!content) {
+    ESP_LOGE(TAG, "Out of memory for content");
+    return;
+  }
+  memcpy(content, pkt->payload + 7, content_len);
+  content[content_len] = '\0';
+
+  add_message_to_window(pkt->msg_id, pkt->timestamp, pkt->sender, content);
+  free(content);
+}
+
+/* ---------- 公共接口 ---------- */
 void chat_service_init(void) {
-  chat_fifo_init(&s_window);
-
-  if (g_packet_queue == NULL) {
-    g_packet_queue = xQueueCreate(20, sizeof(protocol_packet_t));
-  }
-
-  if (g_chat_task_handle == NULL) {
-    xTaskCreate(chat_service_task, "chat_srv", 4096, NULL, 4,
-                &g_chat_task_handle);
-  }
+  s_fifo_mutex = xSemaphoreCreateMutex();
+  memset(s_window, 0, sizeof(s_window));
+  s_window_count = 0;
+  s_window_head = 0;
+  s_dirty = false;
+  // 初始模式已在 protocol.c 中设置为 DEVICE_MODE_HOME
 }
 
-/* ---------- 供全局任务调用 ---------- */
-void chat_service_handle_packet(const protocol_packet_t *pkt) {
-  if (g_packet_queue && pkt) {
-    xQueueSend(g_packet_queue, pkt, 0);
+void chat_service_loop(void) {
+  // 可保留一些周期性维护，例如心跳打印，但不再用于渲染
+  static uint32_t last_print = 0;
+  uint32_t now = xTaskGetTickCount() * portTICK_PERIOD_MS;
+  if (now - last_print > 5000) {
+    last_print = now;
   }
 }
 
-/* ---------- ACK 发送 ---------- */
-static void send_ack(uint8_t ack_type, uint8_t epoch) {
-  uint8_t buf[32];
-  int len = encode_ack_packet(buf, ack_type, epoch);
-  net_ws_send(buf, len);
-}
-
-/* ---------- 应用批次数据到窗口 ---------- */
-static void apply_batch(void) {
-  chat_fifo_clear(&s_window);
-
-  for (int i = 0; i < s_batch_count; i++) {
-    chat_fifo_push(&s_window, &s_batch[i]);
-    if (s_batch[i].msg_id > s_latest_server_msg_id) {
-      s_latest_server_msg_id = s_batch[i].msg_id;
+void chat_service_handle_packet(protocol_packet_t *pkt) {
+  switch (pkt->type) {
+  case TYPE_DATA:
+    handle_data_packet(pkt);
+    break;
+  case TYPE_SYN:
+    ESP_LOGI(TAG, "SYN epoch=%d", pkt->epoch);
+    break;
+  case TYPE_END:
+    ESP_LOGI(TAG, "END epoch=%d", pkt->epoch);
+    break;
+  case TYPE_NOTIFY:
+    ESP_LOGI(TAG, "NOTIFY: msg_id=%lu, sender=%d, preview=%s",
+             pkt->notify_msg_id, pkt->notify_sender, pkt->notify_preview);
+    if (s_notify_cb) {
+      s_notify_cb(pkt->notify_msg_id, pkt->notify_sender, pkt->notify_preview);
     }
-  }
-
-  if (s_batch_count > 0) {
-    s_current_window_newest = s_batch[s_batch_count - 1].msg_id;
-  }
-
-  s_window_dirty = true;
-  s_batch_count = 0;
-
-  if (s_current_window_newest == s_latest_server_msg_id) {
-    s_state = CHAT_LIVE;
+    break;
+  default:
+    break;
   }
 }
 
-/* ---------- 聊天服务内部任务 ---------- */
-static void chat_service_task(void *param) {
-  protocol_packet_t pkt;
+void chat_service_register_render_cb(chat_render_cb_t cb) { s_render_cb = cb; }
 
-  while (1) {
-    if (xQueueReceive(g_packet_queue, &pkt, portMAX_DELAY) == pdTRUE) {
-      switch (pkt.type) {
-      case TYPE_SYN:
-        s_current_epoch = pkt.epoch;
-        send_ack(TYPE_SYN, pkt.epoch);
-        s_batch_count = 0;
-        break;
-
-      case TYPE_DATA:
-        if (s_batch_count < CHAT_WINDOW_SIZE) {
-          s_batch[s_batch_count].msg_id = pkt.msg_id;
-          s_batch[s_batch_count].timestamp = pkt.timestamp;
-          s_batch[s_batch_count].sender = pkt.sender;
-          strncpy(s_batch[s_batch_count].text, pkt.content, CHAT_TEXT_MAX - 1);
-          s_batch[s_batch_count].text[CHAT_TEXT_MAX - 1] = '\0';
-          s_batch_count++;
-        }
-        send_ack(TYPE_DATA, pkt.epoch);
-        break;
-
-      case TYPE_END:
-        send_ack(TYPE_END, pkt.epoch);
-        apply_batch();
-        break;
-
-      case TYPE_NOTIFY:
-        send_ack(TYPE_NOTIFY, pkt.epoch);
-        printf("[CHAT] Received notification, msg_id=%lu\n", pkt.notify_msg_id);
-        if (pkt.notify_msg_id > s_latest_server_msg_id) {
-          s_latest_server_msg_id = pkt.notify_msg_id;
-        }
-        // 历史模式下有新消息，可通过回调通知 UI
-        break;
-
-      default:
-        break;
-      }
-    }
-  }
+bool chat_window_is_dirty(void) {
+  bool dirty;
+  xSemaphoreTake(s_fifo_mutex, portMAX_DELAY);
+  dirty = s_dirty;
+  xSemaphoreGive(s_fifo_mutex);
+  return dirty;
 }
 
-/* ---------- 对外查询接口 ---------- */
-chat_fifo_t *chat_get_window(void) { return &s_window; }
+void chat_window_clear_dirty(void) {
+  xSemaphoreTake(s_fifo_mutex, portMAX_DELAY);
+  s_dirty = false;
+  xSemaphoreGive(s_fifo_mutex);
+}
 
-chat_state_t chat_get_state(void) { return s_state; }
+msg_t *chat_fifo_get(int index) {
+  msg_t *msg = NULL;
+  xSemaphoreTake(s_fifo_mutex, portMAX_DELAY);
+  if (index < s_window_count) {
+    int pos = (s_window_head - 1 - index + CHAT_WINDOW_SIZE) % CHAT_WINDOW_SIZE;
+    msg = &s_window[pos];
+  }
+  xSemaphoreGive(s_fifo_mutex);
+  return msg;
+}
 
-bool chat_window_is_dirty(void) { return s_window_dirty; }
+int chat_fifo_count(void) {
+  int count;
+  xSemaphoreTake(s_fifo_mutex, portMAX_DELAY);
+  count = s_window_count;
+  xSemaphoreGive(s_fifo_mutex);
+  return count;
+}
 
-void chat_window_clear_dirty(void) { s_window_dirty = false; }
-
-/* ---------- 模式切换与请求 ---------- */
 void chat_enter_live(void) {
-  printf("[CHAT] Entering LIVE mode\n");
-  s_state = CHAT_LIVE;
-  protocol_request_history(0xFFFFFFFF, HISTORY_DIR_OLDER);
+  protocol_set_mode(DEVICE_MODE_CHAT_LIVE);
+  uint8_t buf[32];
+  int len = encode_mode_switch(buf, sizeof(buf), 0x01);
+  if (len > 0)
+    net_ws_send(buf, len);
+  ESP_LOGI(TAG, "Enter LIVE mode");
 }
 
-void chat_enter_history(uint32_t last_id, uint8_t direction) {
-  printf("[CHAT] Entering HISTORY mode, last_id=%lu, direction=%u\n", last_id,
-         direction);
-  s_state = CHAT_HISTORY;
-  protocol_request_history(last_id, direction);
+void chat_enter_history(uint32_t last_msg_id, uint8_t direction) {
+  protocol_set_mode(DEVICE_MODE_CHAT_HISTORY);
+  uint8_t buf[32];
+  int len = encode_history_req(buf, sizeof(buf), last_msg_id, direction);
+  if (len > 0)
+    net_ws_send(buf, len);
+  ESP_LOGI(TAG, "Request history last_id=%lu dir=%d", last_msg_id, direction);
 }
 
-/* ---------- 发送文本 ---------- */
-void chat_send_text(const char *text) { protocol_send_message(text); }
+void chat_exit_chat(void) {
+  protocol_set_mode(DEVICE_MODE_HOME);
+  uint8_t buf[32];
+  int len = encode_mode_switch(buf, sizeof(buf), 0x00);
+  if (len > 0)
+    net_ws_send(buf, len);
+  ESP_LOGI(TAG, "Exit to HOME mode");
+}
+
+void chat_send_text(const char *text) {
+  if (!text)
+    return;
+  uint8_t buf[512];
+  int len = encode_data_packet(buf, text);
+  if (len > 0) {
+    net_ws_send(buf, len);
+    ESP_LOGI(TAG, "Sent text: %s", text);
+  } else {
+    ESP_LOGE(TAG, "Failed to encode data packet");
+  }
+}
+
+void chat_show_new_msg_toast(void) {
+  // 可在此实现 toast 提示
+  ESP_LOGI(TAG, "New message arrived (toast)");
+}

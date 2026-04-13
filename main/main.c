@@ -160,6 +160,10 @@ void query_mdns_host(const char *host_name) {
 
 #include "task_manager.h"
 
+#include "chat_service.h"
+
+#include "protocol.h"
+
 void debug_init_nvs_value() {
   nvs_helper_set_i32("storage", "device_id", 3);
   nvs_helper_set_i32("storage", "parent_id", 1);
@@ -187,12 +191,15 @@ void global_socket_init(void) {
   snprintf(global_cfg.user_id, sizeof(global_cfg.user_id), "%ld", pid);
   snprintf(global_cfg.device_id, sizeof(global_cfg.device_id), "%ld", did);
 
-  net_ws_connect(&global_cfg);
-  net_start_reconnect_task(&global_cfg);
-  protocol_switch_mode(DEVICE_MODE_HOME);
-  protocol_send_mode_switch(DEVICE_MODE_HOME);
+  // 初始化聊天服务
+  chat_service_init();
 
-  gs_toast_show("成功创建全局Socket连接", GS_TOAST_SUCCESS);
+  // 初始化网络适配器
+  net_adapter_init(&global_cfg);
+
+  // chat_exit_chat();
+
+  gs_toast_show("全局Socket连接已启动", GS_TOAST_SUCCESS);
 
   task_manager_init(did);
 }
@@ -207,7 +214,7 @@ void app_main(void) {
   lv_obj_t *container = lv_scr_act();
   gs_nav_init(container);
 
-  xTaskCreate(gui_flsuh_task, "gui", 12 * 1024, NULL, 4, NULL);
+  xTaskCreate(gui_flsuh_task, "gui", 8 * 1024, NULL, 4, NULL);
   gs_nav_push(&page_splash, NULL);
   boot_mode_t mode = detect_boot_mode();
 
@@ -235,7 +242,7 @@ void app_main(void) {
     if (IS_DEBUG_MODE) {
       debug_init_nvs_value();
       test_nvs_info();
-      DUMP_MEM_INFO("TEST");
+      TEST_MEM_INFO("TEST");
     }
 
     init_mdns("esp32-s3");
@@ -260,7 +267,7 @@ void app_main(void) {
     }
 
     extern const gs_page_desc_t page_main;
-    // gs_nav_pop();
+    gs_nav_pop();
     gs_nav_push(&page_main, NULL);
   }
 }

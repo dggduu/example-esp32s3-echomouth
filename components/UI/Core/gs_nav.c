@@ -1,4 +1,5 @@
 #include "gs_nav.h"
+#include "esp_log.h"
 #include "esp_lvgl_port.h"
 #include <stdio.h>
 #include <stdlib.h>
@@ -57,6 +58,8 @@ int gs_nav_push(const gs_page_desc_t *page, void *args) {
     return -1;
   if (s_nav.top + 1 >= MAX_STACK_DEPTH)
     return -1;
+
+  ESP_LOGI("NAV", "push page");
 
   if (lvgl_port_lock(-1)) {
     s_nav.busy = true;
