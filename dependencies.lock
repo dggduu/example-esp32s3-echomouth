@@ -82,6 +82,16 @@ dependencies:
       registry_url: https://components.espressif.com
       type: service
     version: 0.5.3
+  espressif/esp-dsp:
+    component_hash: 12e44db246517a627bc0fe2b255b8335410c0215c98bfba2df5a8e3edea839ef
+    dependencies:
+    - name: idf
+      require: private
+      version: '>=4.2'
+    source:
+      registry_url: https://components.espressif.com/
+      type: service
+    version: 1.8.0
   espressif/esp32-camera:
     component_hash: ac4228c825b891378bc0806869170d4ebc5d45ba8ebc519b4f8886a56ad2d123
     dependencies:
@@ -290,6 +300,7 @@ direct_dependencies:
 - chmorgan/esp-file-iterator
 - espressif/ble_ota
 - espressif/button
+- espressif/esp-dsp
 - espressif/esp32-camera
 - espressif/esp_codec_dev
 - espressif/esp_encrypted_img
@@ -302,6 +313,6 @@ direct_dependencies:
 - idf
 - joltwallet/littlefs
 - lvgl/lvgl
-manifest_hash: 962fabc2ff4ec54ccb4089cd44e0fa8a6b94717b8ca04c379c52039516f9f786
+manifest_hash: e6ee6ef612ca0421ed826e6b10a18372aba8e4032c0c07224516edf945d3bc08
 target: esp32s3
 version: 2.0.0

@@ -25,10 +25,11 @@ static void menu_item_click_cb(lv_event_t *e) {
   } else if (strcmp(txt, "TODO") == 0) {
     int device_id = 1;
     gs_nav_push_async(&page_todo, &device_id);
-  } else if (strcmp(txt, "CAM") == 0) {
-    int params = 4;
-    gs_nav_push(&page_cam, &params);
   }
+  //  else if (strcmp(txt, "CAM") == 0) {
+  //   int params = 4;
+  //   gs_nav_push(&page_cam, &params);
+  // }
 }
 
 static lv_obj_t *menu_page_render(lv_obj_t *parent, void *ctx) {
@@ -63,12 +64,12 @@ static lv_obj_t *menu_page_render(lv_obj_t *parent, void *ctx) {
           {LV_SYMBOL_HOME, "主页", "HOME"},
           {LV_SYMBOL_CALL, "聊天", "CHAT"},
           {LV_SYMBOL_LIST, "ToDoList", "TODO"},
-          {LV_SYMBOL_PLAY, "相机", "CAM"},
+          // {LV_SYMBOL_PLAY, "相机", "CAM"},
       }
 
   ;
 
-  for (int i = 0; i < 4; i++) {
+  for (int i = 0; i < 3; i++) {
     lv_obj_t *btn = lv_list_add_btn(list, items[i].icon, items[i].name);
 
     lv_obj_set_style_bg_color(btn, lv_color_white(), 0);

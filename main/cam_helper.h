@@ -2,18 +2,19 @@
 #define __CAM_HELPER_H__
 
 #include "esp_camera.h"
+#include "esp_err.h"
+#include <stdbool.h>
 
 #ifdef __cplusplus
 extern "C" {
 #endif
 
-#include "esp_camera.h"
-#include "esp_jpeg_enc.h"
+esp_err_t cam_helper_acquire(void); // 启动 camera（带引用计数）
+void cam_helper_release(void);      // 释放 camera
 
-void cam_helper_init(void);
+bool cam_helper_is_running(void);
 
 camera_fb_t *cam_helper_get_fb(void);
-
 void cam_helper_return_fb(camera_fb_t *fb);
 
 #ifdef __cplusplus

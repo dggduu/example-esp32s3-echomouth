@@ -30,3 +30,4 @@ dependencies:
   espressif/ble_ota: ^0.1.15
   espressif/esp_encrypted_img: ^2.0.1
   espressif/esp_new_jpeg: ^0.6.1
+  espressif/esp-dsp: ^1.8.0

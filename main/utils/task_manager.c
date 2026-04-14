@@ -3,27 +3,39 @@
 #include "esp_log.h"
 #include "http_client_helper.h"
 #include "nvs_helper.h"
-#include "time.h"
-
 
 static const char *TAG = "TASK_MGR";
 static const char *NVS_NS = "business";
 static const char *KEY_ACTIVE_ID = "active_tid";
 
-// 内部状态
+#define KEY_ACTIVE_TITLE "active_title"
+
+#define KEY_ACTIVE_START "active_start"
+
 static struct {
   int32_t deviceId;
   int32_t active_task_id;
+  char active_title[64];
+  int32_t start_time;
 } s_mgr;
 
 bool task_manager_init(int32_t device_id) {
   s_mgr.deviceId = device_id;
-  // 从 NVS 恢复状态
   if (nvs_helper_get_i32(NVS_NS, KEY_ACTIVE_ID, &s_mgr.active_task_id) !=
       ESP_OK) {
-    s_mgr.active_task_id = 0; // 默认无任务
+    s_mgr.active_task_id = 0;
   }
-  ESP_LOGI(TAG, "Initialized. Active Task ID: %ld", s_mgr.active_task_id);
+  // 修正：传递缓冲区大小，而不是指针
+  if (nvs_helper_get_string(NVS_NS, KEY_ACTIVE_TITLE, s_mgr.active_title,
+                            sizeof(s_mgr.active_title)) != ESP_OK) {
+    s_mgr.active_title[0] = '\0';
+  }
+  if (nvs_helper_get_i32(NVS_NS, KEY_ACTIVE_START, &s_mgr.start_time) !=
+      ESP_OK) {
+    s_mgr.start_time = 0;
+  }
+  ESP_LOGI(TAG, "Init: active_id=%ld, title=%s, start_time=%ld",
+           s_mgr.active_task_id, s_mgr.active_title, s_mgr.start_time);
   return true;
 }
 
@@ -73,31 +85,41 @@ bool task_manager_fetch_list(page_todo_ctx_t *ctx) {
   return true;
 }
 
-bool task_manager_start(int task_id) {
-  // 1. 唯一性检查
+bool task_manager_start(int task_id, const char *title) {
   if (s_mgr.active_task_id != 0) {
     ESP_LOGW(TAG, "Task %ld already running. Cannot start %d",
              s_mgr.active_task_id, task_id);
     return false;
   }
 
-  // 2. 构造请求
   char path[64];
   snprintf(path, sizeof(path), "/device/%d/start", task_id);
-
   cJSON *root = cJSON_CreateObject();
   cJSON_AddNumberToObject(root, "deviceId", s_mgr.deviceId);
   cJSON_AddNumberToObject(root, "startTime", (double)time(NULL));
   char *body = cJSON_PrintUnformatted(root);
 
-  // 3. 发送并等待结果
   bool success = false;
   if (body) {
     if (http_post_json(path, body)) {
-      // 4. 持久化状态
       s_mgr.active_task_id = task_id;
       nvs_helper_set_i32(NVS_NS, KEY_ACTIVE_ID, task_id);
-      ESP_LOGI(TAG, "Task %d started and persisted.", task_id);
+
+      if (title && strlen(title) > 0) {
+        strlcpy(s_mgr.active_title, title, sizeof(s_mgr.active_title));
+        nvs_helper_set_string(NVS_NS, KEY_ACTIVE_TITLE, s_mgr.active_title);
+      } else {
+        s_mgr.active_title[0] = '\0';
+        nvs_helper_erase_key(NVS_NS, KEY_ACTIVE_TITLE);
+      }
+
+      // 记录开始时间（int32_t 存储）
+      time_t now = time(NULL);
+      s_mgr.start_time = (int32_t)now;
+      nvs_helper_set_i32(NVS_NS, KEY_ACTIVE_START, s_mgr.start_time);
+
+      ESP_LOGI(TAG, "Task %d started. Title=%s, start_time=%ld", task_id,
+               s_mgr.active_title, s_mgr.start_time);
       success = true;
     }
     free(body);
@@ -108,14 +130,13 @@ bool task_manager_start(int task_id) {
 
 bool task_manager_complete(int task_id) {
   if (s_mgr.active_task_id != task_id) {
-    ESP_LOGE(TAG, "ID Mismatch: Current %ld, Target %d", s_mgr.active_task_id,
+    ESP_LOGE(TAG, "ID mismatch: current=%ld, target=%d", s_mgr.active_task_id,
              task_id);
     return false;
   }
 
   char path[64];
   snprintf(path, sizeof(path), "/device/%d/complete", task_id);
-
   cJSON *root = cJSON_CreateObject();
   cJSON_AddNumberToObject(root, "deviceId", s_mgr.deviceId);
   cJSON_AddNumberToObject(root, "endTime", (double)time(NULL));
@@ -126,10 +147,13 @@ bool task_manager_complete(int task_id) {
   bool success = false;
   if (body) {
     if (http_post_json(path, body)) {
-      // 只有服务器确认完成，才清除本地状态
       s_mgr.active_task_id = 0;
+      s_mgr.active_title[0] = '\0';
+      s_mgr.start_time = 0;
       nvs_helper_erase_key(NVS_NS, KEY_ACTIVE_ID);
-      ESP_LOGI(TAG, "Task %d completed and cleared.", task_id);
+      nvs_helper_erase_key(NVS_NS, KEY_ACTIVE_TITLE);
+      nvs_helper_erase_key(NVS_NS, KEY_ACTIVE_START);
+      ESP_LOGI(TAG, "Task %d completed, state cleared.", task_id);
       success = true;
     }
     free(body);
@@ -137,3 +161,7 @@ bool task_manager_complete(int task_id) {
   cJSON_Delete(root);
   return success;
 }
+
+const char *task_manager_get_active_title(void) { return s_mgr.active_title; }
+
+time_t task_manager_get_start_time(void) { return (time_t)s_mgr.start_time; }

@@ -97,7 +97,7 @@ static lv_obj_t *page_ota_render(lv_obj_t *parent, void *ctx_ptr) {
   // lv_label_set_text(lbl_btn, "Exit");
 
   lv_obj_t *lbl_title = lv_label_create(page);
-  lv_label_set_text(lbl_title, "Firmware Update");
+  lv_label_set_text(lbl_title, "固件更新");
   lv_obj_align(lbl_title, LV_ALIGN_TOP_MID, 0, 20);
 
   ctx->bar_progress = lv_bar_create(page);
@@ -112,7 +112,7 @@ static lv_obj_t *page_ota_render(lv_obj_t *parent, void *ctx_ptr) {
                   0, 10);
 
   ctx->lbl_status = lv_label_create(page);
-  lv_label_set_text(ctx->lbl_status, "Ready to connect...");
+  lv_label_set_text(ctx->lbl_status, "等待 APP 连接...");
   lv_obj_align_to(ctx->lbl_status, ctx->lbl_percent, LV_ALIGN_OUT_BOTTOM_MID, 0,
                   20);
 

@@ -21,21 +21,19 @@
 
 #include "time_test_helper.h"
 
-// 监控任务栈大小（字节）- 使用内部 RAM，不宜过大
 #define MONITOR_STACK_SIZE 4096
-// VLM 轮询任务栈大小（字节）- 可使用 PSRAM
 #define VLM_POLL_STACK_SIZE 4096
 
 // 间隔边界（秒）
-#define INTERVAL_MIN_SEC 10
-#define INTERVAL_MAX_SEC 15
+#define INTERVAL_MIN_SEC (60 * 1)
+#define INTERVAL_MAX_SEC (60 * 30)
 
 #define FACE_WAIT_FAST_SEC 300
 #define FACE_WAIT_SLOW_SEC 500
 
 #define FACE_WAIT_TIMEOUT_SEC 300
 #define INTERVAL_STEP_SEC 15
-#define FACE_POLL_INTERVAL_MS 20000
+#define FACE_POLL_INTERVAL_MS 30000
 #define UPLOAD_CALLBACK_TIMEOUT_MS 30000
 
 #define VLM_POLL_INTERVAL_MS 15000
@@ -59,7 +57,7 @@ typedef enum {
 static TaskHandle_t s_monitor_task_handle = NULL;
 static TaskHandle_t s_vlm_poll_task_handle = NULL;
 
-// VLM 任务使用 PSRAM 静态分配（不操作文件系统）
+// VLM 任务使用 PSRAM 静态分配
 static StaticTask_t s_vlm_task_tcb;
 static StackType_t *s_vlm_task_stack = NULL;
 
@@ -67,7 +65,7 @@ static SemaphoreHandle_t s_upload_done_sem = NULL;
 static SemaphoreHandle_t s_monitor_mutex = NULL;
 static monitor_state_t s_state = MONITOR_STATE_IDLE;
 static int64_t s_next_wake_time_us = 0;
-static int s_current_interval_sec = INTERVAL_MAX_SEC;
+static int s_current_interval_sec = INTERVAL_MIN_SEC;
 static int64_t s_face_wait_start_us = 0;
 
 static void monitor_task_func(void *arg);
@@ -245,7 +243,7 @@ static void vlm_poll_task_func(void *arg) {
 static void monitor_task_func(void *arg) {
   ESP_LOGI(TAG, "Monitor task started (internal SRAM stack)");
   s_state = MONITOR_STATE_IDLE;
-  s_current_interval_sec = INTERVAL_MAX_SEC;
+  s_current_interval_sec = INTERVAL_MIN_SEC;
   s_next_wake_time_us =
       esp_timer_get_time() + (int64_t)s_current_interval_sec * 1000000;
 
@@ -255,7 +253,7 @@ static void monitor_task_func(void *arg) {
       if (s_state != MONITOR_STATE_IDLE) {
         ESP_LOGI(TAG, "No active task, enter IDLE");
         s_state = MONITOR_STATE_IDLE;
-        s_current_interval_sec = INTERVAL_MAX_SEC;
+        s_current_interval_sec = INTERVAL_MIN_SEC;
       }
       vTaskDelay(pdMS_TO_TICKS(5000));
       continue;
@@ -264,7 +262,7 @@ static void monitor_task_func(void *arg) {
     int64_t now_us = esp_timer_get_time();
     switch (s_state) {
     case MONITOR_STATE_IDLE:
-      s_current_interval_sec = INTERVAL_MAX_SEC;
+      s_current_interval_sec = INTERVAL_MIN_SEC;
       s_next_wake_time_us = now_us + (int64_t)s_current_interval_sec * 1000000;
       s_state = MONITOR_STATE_SLEEP;
       ESP_LOGI(TAG, "IDLE->SLEEP, interval=%d sec", s_current_interval_sec);
@@ -406,7 +404,7 @@ void monitor_task_reset_timer(void) {
     xSemaphoreTake(s_monitor_mutex, portMAX_DELAY);
     s_state = MONITOR_STATE_SLEEP;
     s_next_wake_time_us = esp_timer_get_time() + 1000000LL;
-    s_current_interval_sec = INTERVAL_MAX_SEC;
+    s_current_interval_sec = INTERVAL_MIN_SEC;
     xSemaphoreGive(s_monitor_mutex);
     ESP_LOGI(TAG, "Timer reset with 1s delay before next wake");
   }
@@ -414,11 +412,13 @@ void monitor_task_reset_timer(void) {
 
 void monitor_task_pause(void) {
   if (s_monitor_task_handle)
-    vTaskSuspend(s_monitor_task_handle);
+    ESP_LOGI(TAG, "moitor task pause");
+  vTaskSuspend(s_monitor_task_handle);
 }
 
 void monitor_task_resume(void) {
   if (s_monitor_task_handle) {
+    ESP_LOGI(TAG, "moitor task resume");
     monitor_task_reset_timer();
     vTaskResume(s_monitor_task_handle);
   }

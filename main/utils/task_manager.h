@@ -5,6 +5,7 @@
 #include <stdint.h>
 
 #include "lvgl.h"
+#include <time.h>
 
 #define MAX_TASKS 3
 #define TASK_STR_LEN 64
@@ -46,8 +47,10 @@ bool task_manager_fetch_list(page_todo_ctx_t *ctx);
  * @brief 开始一个新任务
  * @return false 如果已有任务在运行或网络失败
  */
-bool task_manager_start(int task_id);
+const char *task_manager_get_active_title(void);
+bool task_manager_start(int task_id, const char *title);
 
+time_t task_manager_get_start_time(void);
 /**
  * @brief 完成当前任务
  * @return false 如果 ID 不匹配或服务器返回失败

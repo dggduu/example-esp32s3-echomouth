@@ -7,6 +7,8 @@
 #include "task_manager.h"
 #include <string.h>
 
+#include "monitor_mamager.h"
+
 #define TAG "PAGE_TODO"
 
 static page_todo_ctx_t s_ctx;
@@ -46,13 +48,13 @@ static void load_and_render(void); // 前置声明
 static void on_start_click(lv_event_t *e) {
   int index = (int)(intptr_t)lv_event_get_user_data(e);
   int task_id = s_ctx.tasks[index].id;
+  const char *title = s_ctx.tasks[index].title;
 
-  if (task_manager_start(task_id)) {
-    gs_toast_show(" 任务开始", GS_TOAST_SUCCESS);
-    load_and_render(); // 刷新列表以更新状态
+  if (task_manager_start(task_id, title)) {
+    gs_toast_show("任务开始", GS_TOAST_SUCCESS);
+    load_and_render();
   } else {
-    // 如果失败，可能是网络问题或已有任务在运行
-    gs_toast_show("请先完成一开始的任务", GS_TOAST_FAILED);
+    gs_toast_show("请先完成当前任务", GS_TOAST_FAILED);
   }
 }
 
@@ -62,14 +64,9 @@ static void on_complete_click(lv_event_t *e) {
   int index = (int)(intptr_t)lv_event_get_user_data(e);
   int task_id = s_ctx.tasks[index].id;
 
-  gs_nav_push(&page_cam, task_id);
+  
 
-  if (task_manager_complete(task_id)) {
-    gs_toast_show("任务成功标记完成", GS_TOAST_SUCCESS);
-    load_and_render();
-  } else {
-    gs_toast_show("任务提交失败，请重试", GS_TOAST_FAILED);
-  }
+  gs_nav_push(&page_cam, &task_id);
 }
 
 /* ================= UI 渲染逻辑 ================= */
@@ -223,8 +220,11 @@ static lv_obj_t *page_todo_render(lv_obj_t *parent, void *ctx_ptr) {
   lv_obj_set_style_radius(side, 0, 0);
   lv_obj_set_style_border_width(side, 0, 0);
 
+  // 返回按钮：使用左箭头图标
   lv_obj_t *back = lv_btn_create(side);
-  lv_label_set_text(lv_label_create(back), "< Back");
+  lv_obj_t *back_label = lv_label_create(back);
+  lv_label_set_text(back_label, LV_SYMBOL_LEFT);
+  lv_obj_center(back_label);
   lv_obj_add_event_cb(back, btn_back_event, LV_EVENT_CLICKED, NULL);
 
   lv_obj_t *ctrls = lv_obj_create(side);
@@ -233,16 +233,22 @@ static lv_obj_t *page_todo_render(lv_obj_t *parent, void *ctx_ptr) {
   lv_obj_set_style_bg_opa(ctrls, 0, 0);
   lv_obj_set_style_border_width(ctrls, 0, 0);
 
+  // Prev 按钮：使用上一页图标
   ctx->btn_prev = lv_btn_create(ctrls);
-  lv_label_set_text(lv_label_create(ctx->btn_prev), "Prev");
+  lv_obj_t *prev_label = lv_label_create(ctx->btn_prev);
+  lv_label_set_text(prev_label, LV_SYMBOL_PREV);
+  lv_obj_center(prev_label);
   lv_obj_add_event_cb(ctx->btn_prev, btn_prev_event, LV_EVENT_CLICKED, NULL);
 
   ctx->lbl_page = lv_label_create(ctrls);
   lv_obj_set_style_text_color(ctx->lbl_page, lv_color_white(), 0);
   lv_obj_set_style_text_align(ctx->lbl_page, LV_TEXT_ALIGN_CENTER, 0);
 
+  // Next 按钮：使用下一页图标
   ctx->btn_next = lv_btn_create(ctrls);
-  lv_label_set_text(lv_label_create(ctx->btn_next), "Next");
+  lv_obj_t *next_label = lv_label_create(ctx->btn_next);
+  lv_label_set_text(next_label, LV_SYMBOL_NEXT);
+  lv_obj_center(next_label);
   lv_obj_add_event_cb(ctx->btn_next, btn_next_event, LV_EVENT_CLICKED, NULL);
 
   // Main Panel
