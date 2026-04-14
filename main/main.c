@@ -16,6 +16,8 @@
 
 #include "s3_helper.h"
 
+#include "face_detector_helper.h"
+
 #include "button_gpio.h"
 #include "gs_portal.h"
 #include "img_queue.h"
@@ -28,6 +30,10 @@ static button_handle_t btn;
 static bool s_ota_mode_active = false;
 extern EventGroupHandle_t wifi_event_group;
 extern const int WIFI_CONNECTED_EVENT;
+
+static TaskHandle_t s_gui_task_handle = NULL;
+static StaticTask_t s_gui_task_tcb;
+static StackType_t *s_gui_task_stack = NULL;
 
 typedef enum {
   BOOT_MODE_NORMAL = 0,
@@ -135,9 +141,9 @@ void gui_flsuh_task(void *param) {
       uint32_t sleep_ms = lv_timer_handler();
       gs_nav_loop();
       lvgl_port_unlock();
-      vTaskDelay(pdMS_TO_TICKS(sleep_ms <= 0 ? 1 : sleep_ms));
+      vTaskDelay(pdMS_TO_TICKS(sleep_ms <= 0 ? 10 : sleep_ms));
     } else {
-      vTaskDelay(pdMS_TO_TICKS(10));
+      vTaskDelay(pdMS_TO_TICKS(100));
     }
   }
 }
@@ -229,6 +235,35 @@ void global_socket_init(void) {
   task_manager_init(did);
 }
 
+void gui_task_regsiter() {
+  const size_t gui_stack_size = 8192; // 栈大小（字节）
+  s_gui_task_stack = (StackType_t *)heap_caps_malloc(
+      gui_stack_size, MALLOC_CAP_SPIRAM | MALLOC_CAP_8BIT);
+  if (s_gui_task_stack) {
+    size_t stack_depth = gui_stack_size / sizeof(StackType_t);
+    s_gui_task_handle =
+        xTaskCreateStatic(gui_flsuh_task, "gui", stack_depth, NULL,
+                          4, // 优先级
+                          s_gui_task_stack, &s_gui_task_tcb);
+    if (s_gui_task_handle) {
+      ESP_LOGI("MAIN", "GUI task created on PSRAM stack (%zu bytes)",
+               gui_stack_size);
+    } else {
+      ESP_LOGW("MAIN",
+               "xTaskCreateStatic failed, fallback to dynamic allocation");
+      heap_caps_free(s_gui_task_stack);
+      s_gui_task_stack = NULL;
+      xTaskCreate(gui_flsuh_task, "gui", gui_stack_size, NULL, 4, NULL);
+    }
+  } else {
+    ESP_LOGW("MAIN",
+             "PSRAM allocation failed for GUI stack, using internal RAM");
+    xTaskCreate(gui_flsuh_task, "gui", gui_stack_size, NULL, 4, NULL);
+  }
+
+  TEST_MEM_INFO(TAG);
+}
+
 void app_main(void) {
   bsp_i2c_init();
   pca9557_init();
@@ -239,7 +274,8 @@ void app_main(void) {
   lv_obj_t *container = lv_scr_act();
   gs_nav_init(container);
 
-  xTaskCreate(gui_flsuh_task, "gui", 8 * 1024, NULL, 4, NULL);
+  // xTaskCreate(gui_flsuh_task, "gui", 8 * 1024, NULL, 4, NULL);
+  gui_task_regsiter();
   gs_nav_push(&page_splash, NULL);
   boot_mode_t mode = detect_boot_mode();
 
@@ -275,7 +311,13 @@ void app_main(void) {
     query_mdns_host("aobara-pc");
 
     bsp_camera_init();
+    face_detector_helper_init(320, 240);
 
+    if (face_detector_helper_trigger_detection(1000)) {
+      ESP_LOGI(TAG, "detected facesd");
+    } else {
+      ESP_LOGI(TAG, "undetected facesd");
+    }
     // 启动s3服务
     uploader_task_start();
 

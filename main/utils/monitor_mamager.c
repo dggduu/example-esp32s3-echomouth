@@ -6,6 +6,7 @@
 #include "esp_timer.h"
 #include "face_detector_helper.h"
 #include "freertos/FreeRTOS.h"
+#include "freertos/queue.h"
 #include "freertos/semphr.h"
 #include "freertos/task.h"
 #include "http_client_helper.h"
@@ -16,24 +17,38 @@
 #include <string.h>
 #include <sys/stat.h>
 
-#include "s3_helper.h"
-
 #define TAG "MONITOR"
-#define MONITOR_STACK_SIZE 8192
+
+#include "time_test_helper.h"
+
+// 监控任务栈大小（字节）- 使用内部 RAM，不宜过大
+#define MONITOR_STACK_SIZE 4096
+// VLM 轮询任务栈大小（字节）- 可使用 PSRAM
+#define VLM_POLL_STACK_SIZE 4096
 
 // 间隔边界（秒）
-#define INTERVAL_MIN_SEC 30
-#define INTERVAL_MAX_SEC 180
+#define INTERVAL_MIN_SEC 10
+#define INTERVAL_MAX_SEC 15
 
-// 人脸等待阈值
-#define FACE_WAIT_FAST_SEC 5      // ≤5秒内检测到人脸视为及时
-#define FACE_WAIT_SLOW_SEC 30     // ≥30秒才检测到人脸视为迟缓
-#define FACE_WAIT_TIMEOUT_SEC 300 // 最大等待时间（5分钟），超时放弃
+#define FACE_WAIT_FAST_SEC 300
+#define FACE_WAIT_SLOW_SEC 500
 
-// 间隔调整步长（秒）
+#define FACE_WAIT_TIMEOUT_SEC 300
 #define INTERVAL_STEP_SEC 15
+#define FACE_POLL_INTERVAL_MS 20000
+#define UPLOAD_CALLBACK_TIMEOUT_MS 30000
 
-// 状态机
+#define VLM_POLL_INTERVAL_MS 15000
+#define VLM_MAX_RETRIES 30
+
+typedef struct {
+  char tick_id[32];
+  bool success;
+  int suggested_interval;
+} vlm_result_msg_t;
+
+static QueueHandle_t s_vlm_result_queue = NULL;
+
 typedef enum {
   MONITOR_STATE_IDLE,
   MONITOR_STATE_SLEEP,
@@ -41,29 +56,65 @@ typedef enum {
   MONITOR_STATE_CAPTURING,
 } monitor_state_t;
 
-static TaskHandle_t monitor_task_handle = NULL;
-static SemaphoreHandle_t s_interval_sem = NULL;   // 上传回调完成信号
-static int s_new_interval_sec = INTERVAL_MAX_SEC; // 回调填充的新间隔
-static bool s_upload_success = false;             // 上传是否成功（用于回调）
-static char s_tick_id[32] = {0};                  // 回调填充的 tickId
+static TaskHandle_t s_monitor_task_handle = NULL;
+static TaskHandle_t s_vlm_poll_task_handle = NULL;
 
-static SemaphoreHandle_t s_pause_sem = NULL; // 用于挂起任务
-static bool s_paused = false;
-static SemaphoreHandle_t s_state_mutex = NULL;
+// VLM 任务使用 PSRAM 静态分配（不操作文件系统）
+static StaticTask_t s_vlm_task_tcb;
+static StackType_t *s_vlm_task_stack = NULL;
 
+static SemaphoreHandle_t s_upload_done_sem = NULL;
+static SemaphoreHandle_t s_monitor_mutex = NULL;
 static monitor_state_t s_state = MONITOR_STATE_IDLE;
 static int64_t s_next_wake_time_us = 0;
 static int s_current_interval_sec = INTERVAL_MAX_SEC;
-
-// 人脸等待计时
 static int64_t s_face_wait_start_us = 0;
 
-// 回调函数声明
+static void monitor_task_func(void *arg);
+static void vlm_poll_task_func(void *arg);
 static void monitor_upload_callback(bool success, const char *tick_id_or_key,
                                     void *user_data);
+static int adjust_interval_by_face_wait(int64_t wait_sec);
+static bool capture_and_enqueue(void);
 
-// JPEG 压缩辅助函数（与之前相同）
-static bool compress_fb_to_jpeg_file(camera_fb_t *fb, const char *filepath) {
+static int adjust_interval_by_face_wait(int64_t wait_sec) {
+  int new_interval = s_current_interval_sec;
+  if (wait_sec <= FACE_WAIT_FAST_SEC) {
+    new_interval -= INTERVAL_STEP_SEC;
+    ESP_LOGI(TAG, "Fast face detection (%lld s) → interval -%d", wait_sec,
+             INTERVAL_STEP_SEC);
+  } else if (wait_sec >= FACE_WAIT_SLOW_SEC) {
+    new_interval += INTERVAL_STEP_SEC;
+    ESP_LOGI(TAG, "Slow face detection (%lld s) → interval +%d", wait_sec,
+             INTERVAL_STEP_SEC);
+  }
+  if (new_interval < INTERVAL_MIN_SEC)
+    new_interval = INTERVAL_MIN_SEC;
+  if (new_interval > INTERVAL_MAX_SEC)
+    new_interval = INTERVAL_MAX_SEC;
+  return new_interval;
+}
+
+static bool capture_and_enqueue(void) {
+  int32_t device_id = 1;
+  nvs_helper_get_i32("storage", "device_id", &device_id);
+  int32_t task_id = task_manager_get_active_id();
+  if (task_id == 0) {
+    ESP_LOGW(TAG, "No active task, skip capture");
+    return false;
+  }
+
+  camera_fb_t *fb = esp_camera_fb_get();
+  if (!fb) {
+    ESP_LOGE(TAG, "Camera capture failed");
+    return false;
+  }
+
+  char filepath[64];
+  int64_t timestamp = esp_timer_get_time() / 1000;
+  snprintf(filepath, sizeof(filepath), "/littlefs/monitor_%lld.jpg", timestamp);
+
+  // JPEG 压缩
   jpeg_enc_config_t cfg = DEFAULT_JPEG_ENC_CONFIG();
   cfg.width = fb->width;
   cfg.height = fb->height;
@@ -73,6 +124,7 @@ static bool compress_fb_to_jpeg_file(camera_fb_t *fb, const char *filepath) {
 
   jpeg_enc_handle_t enc;
   if (jpeg_enc_open(&cfg, &enc) != JPEG_ERR_OK) {
+    esp_camera_fb_return(fb);
     return false;
   }
 
@@ -80,6 +132,7 @@ static bool compress_fb_to_jpeg_file(camera_fb_t *fb, const char *filepath) {
   uint8_t *jpg_buf = jpeg_calloc_align(jpg_buf_size, 16);
   if (!jpg_buf) {
     jpeg_enc_close(enc);
+    esp_camera_fb_return(fb);
     return false;
   }
 
@@ -87,6 +140,7 @@ static bool compress_fb_to_jpeg_file(camera_fb_t *fb, const char *filepath) {
   esp_err_t ret =
       jpeg_enc_process(enc, fb->buf, fb->len, jpg_buf, jpg_buf_size, &out_len);
   jpeg_enc_close(enc);
+  esp_camera_fb_return(fb);
 
   if (ret != JPEG_ERR_OK || out_len == 0) {
     jpeg_free_align(jpg_buf);
@@ -101,112 +155,16 @@ static bool compress_fb_to_jpeg_file(camera_fb_t *fb, const char *filepath) {
   fwrite(jpg_buf, 1, out_len, f);
   fclose(f);
   jpeg_free_align(jpg_buf);
-
   ESP_LOGI(TAG, "JPEG saved: %s (%d bytes)", filepath, out_len);
-  return true;
-}
 
-// 轮询 VLM 结果（可阻塞）
-static int poll_vlm_result(const char *tick_id) {
-  char path[64];
-  snprintf(path, sizeof(path), "/image/result/%s", tick_id);
-
-  char resp[512];
-  int interval = s_current_interval_sec; // 默认不变
-  int retry = 0;
-  const int max_retries = 30;
-
-  while (retry < max_retries) {
-    if (!http_get_json(path, resp, sizeof(resp))) {
-      vTaskDelay(pdMS_TO_TICKS(1000));
-      retry++;
-      continue;
-    }
-
-    cJSON *root = cJSON_Parse(resp);
-    if (!root) {
-      vTaskDelay(pdMS_TO_TICKS(1000));
-      retry++;
-      continue;
-    }
-
-    cJSON *status = cJSON_GetObjectItem(root, "status");
-    if (status && strcmp(status->valuestring, "completed") == 0) {
-      cJSON *interval_obj = cJSON_GetObjectItem(root, "interval");
-      if (cJSON_IsNumber(interval_obj)) {
-        interval = interval_obj->valueint;
-        // 我们忽略 VLM 建议的间隔，仅用于记录，间隔调整由人脸等待时间决定
-        ESP_LOGI(TAG, "VLM suggested interval: %d (ignored)", interval);
-      }
-      cJSON_Delete(root);
-      return 0; // 返回0表示成功，实际间隔在外部调整
-    } else if (status && strcmp(status->valuestring, "pending") == 0) {
-      cJSON_Delete(root);
-      vTaskDelay(pdMS_TO_TICKS(1000));
-      retry++;
-    } else {
-      cJSON_Delete(root);
-      ESP_LOGW(TAG, "VLM result: %s", status ? status->valuestring : "null");
-      return -1; // 失败
-    }
-  }
-
-  ESP_LOGW(TAG, "Polling timeout");
-  return -1;
-}
-
-// 上传完成回调（在上传器任务中执行）
-static void monitor_upload_callback(bool success, const char *tick_id_or_key,
-                                    void *user_data) {
-  s_upload_success = success;
-  if (success) {
-    strlcpy(s_tick_id, tick_id_or_key, sizeof(s_tick_id));
-    // 轮询 VLM（我们仅需确认分析完成，不采用其返回的间隔）
-    int ret = poll_vlm_result(s_tick_id);
-    if (ret != 0) {
-      ESP_LOGW(TAG, "VLM polling failed, but upload succeeded");
-    }
-  } else {
-    ESP_LOGE(TAG, "Monitor upload failed");
-  }
-
-  // 间隔将在主循环中根据人脸等待时间调整，此处仅通知主循环继续
-  xSemaphoreGive(s_interval_sem);
-}
-
-// 执行一次拍照并推入上传队列
-static bool capture_and_enqueue(void) {
-  int32_t device_id = 1;
-  nvs_helper_get_i32("storage", "device_id", &device_id);
-  int32_t task_id = task_manager_get_active_id();
-  if (task_id == 0) {
-    return false;
-  }
-
-  camera_fb_t *fb = esp_camera_fb_get();
-  if (!fb) {
-    ESP_LOGE(TAG, "Camera capture failed");
-    return false;
-  }
-
-  char filepath[64];
-  int64_t timestamp = esp_timer_get_time() / 1000;
-  snprintf(filepath, sizeof(filepath), "/littlefs/monitor_%lld.jpg", timestamp);
-
-  bool saved = compress_fb_to_jpeg_file(fb, filepath);
-  esp_camera_fb_return(fb);
-  if (!saved) {
-    ESP_LOGE(TAG, "Failed to save JPEG");
-    return false;
-  }
-
-  img_job_t job = {.path = {0},
-                   .task_id = task_id,
-                   .priority = IMG_PRIORITY_LOW,
-                   .type = IMG_TYPE_MONITOR,
-                   .on_complete = monitor_upload_callback,
-                   .user_data = NULL,
-                   .retry_count = 0};
+  img_job_t job = {
+      .task_id = task_id,
+      .priority = IMG_PRIORITY_LOW,
+      .type = IMG_TYPE_MONITOR,
+      .on_complete = monitor_upload_callback,
+      .user_data = NULL,
+      .retry_count = 0,
+  };
   strlcpy(job.path, filepath, sizeof(job.path));
 
   if (!img_queue_push(&job)) {
@@ -214,197 +172,254 @@ static bool capture_and_enqueue(void) {
     remove(filepath);
     return false;
   }
-
-  ESP_LOGI(TAG, "Monitor capture queued: %s", filepath);
   return true;
 }
 
-// 根据人脸等待时长调整下次间隔
-static int adjust_interval_by_face_wait(int64_t wait_sec) {
-  int new_interval = s_current_interval_sec;
-
-  if (wait_sec <= FACE_WAIT_FAST_SEC) {
-    // 及时检测到人脸，缩短间隔
-    new_interval -= INTERVAL_STEP_SEC;
-    ESP_LOGI(TAG, "Face detected quickly (%lld sec), decreasing interval",
-             wait_sec);
-  } else if (wait_sec >= FACE_WAIT_SLOW_SEC) {
-    // 检测迟缓，拉长间隔
-    new_interval += INTERVAL_STEP_SEC;
-    ESP_LOGI(TAG, "Face detected slowly (%lld sec), increasing interval",
-             wait_sec);
-  } else {
-    // 中等速度，保持不变
-    ESP_LOGI(TAG, "Face detected in medium time (%lld sec), interval unchanged",
-             wait_sec);
+static void monitor_upload_callback(bool success, const char *tick_id_or_key,
+                                    void *user_data) {
+  ESP_LOGI(TAG, "Upload callback: success=%d, tick=%s", success,
+           tick_id_or_key ? tick_id_or_key : "NULL");
+  if (!success) {
+    xSemaphoreGive(s_upload_done_sem);
+    return;
   }
-
-  // 限制边界
-  if (new_interval < INTERVAL_MIN_SEC)
-    new_interval = INTERVAL_MIN_SEC;
-  if (new_interval > INTERVAL_MAX_SEC)
-    new_interval = INTERVAL_MAX_SEC;
-
-  return new_interval;
+  if (s_vlm_result_queue) {
+    vlm_result_msg_t msg = {0};
+    msg.success = true;
+    strlcpy(msg.tick_id, tick_id_or_key, sizeof(msg.tick_id));
+    if (xQueueSend(s_vlm_result_queue, &msg, 0) != pdTRUE) {
+      ESP_LOGW(TAG, "VLM queue full");
+      xSemaphoreGive(s_upload_done_sem);
+    }
+  } else {
+    xSemaphoreGive(s_upload_done_sem);
+  }
 }
 
-// 监控任务主循环
-static void monitor_task_func(void *arg) {
-  ESP_LOGI(TAG, "Monitor task started");
+static void vlm_poll_task_func(void *arg) {
+  vlm_result_msg_t msg;
+  ESP_LOGI(TAG, "VLM poll task started");
+  while (1) {
+    if (xQueueReceive(s_vlm_result_queue, &msg, portMAX_DELAY) != pdTRUE)
+      continue;
+    if (!msg.success)
+      continue;
 
+    char path[64];
+    snprintf(path, sizeof(path), "/device/image/result/%s", msg.tick_id);
+    char resp[512];
+    bool vlm_ok = false;
+    for (int retry = 0; retry < VLM_MAX_RETRIES; retry++) {
+      if (!http_get_json(path, resp, sizeof(resp))) {
+        vTaskDelay(pdMS_TO_TICKS(VLM_POLL_INTERVAL_MS));
+        continue;
+      }
+      cJSON *root = cJSON_Parse(resp);
+      if (!root) {
+        vTaskDelay(pdMS_TO_TICKS(VLM_POLL_INTERVAL_MS));
+        continue;
+      }
+      cJSON *status = cJSON_GetObjectItem(root, "status");
+      if (status && strcmp(status->valuestring, "completed") == 0) {
+        vlm_ok = true;
+        cJSON_Delete(root);
+        break;
+      } else if (status && strcmp(status->valuestring, "pending") == 0) {
+        cJSON_Delete(root);
+        vTaskDelay(pdMS_TO_TICKS(VLM_POLL_INTERVAL_MS));
+        continue;
+      } else {
+        cJSON_Delete(root);
+        break;
+      }
+    }
+    if (vlm_ok) {
+      ESP_LOGI(TAG, "VLM completed for tick %s", msg.tick_id);
+    } else {
+      ESP_LOGW(TAG, "VLM failed for tick %s", msg.tick_id);
+    }
+    xSemaphoreGive(s_upload_done_sem);
+  }
+}
+
+static void monitor_task_func(void *arg) {
+  ESP_LOGI(TAG, "Monitor task started (internal SRAM stack)");
   s_state = MONITOR_STATE_IDLE;
   s_current_interval_sec = INTERVAL_MAX_SEC;
   s_next_wake_time_us =
       esp_timer_get_time() + (int64_t)s_current_interval_sec * 1000000;
 
   while (1) {
-    xSemaphoreTake(s_state_mutex, portMAX_DELAY);
-    if (s_paused) {
-      xSemaphoreGive(s_state_mutex);
-      // 等待恢复信号
-      xSemaphoreTake(s_pause_sem, portMAX_DELAY);
-      // 恢复后重新获取状态
-      continue;
-    }
-    xSemaphoreGive(s_state_mutex);
-
     int32_t active_task = task_manager_get_active_id();
-
     if (active_task == 0) {
       if (s_state != MONITOR_STATE_IDLE) {
+        ESP_LOGI(TAG, "No active task, enter IDLE");
         s_state = MONITOR_STATE_IDLE;
-        ESP_LOGI(TAG, "No active task, entering IDLE");
+        s_current_interval_sec = INTERVAL_MAX_SEC;
       }
       vTaskDelay(pdMS_TO_TICKS(5000));
       continue;
     }
 
     int64_t now_us = esp_timer_get_time();
-
     switch (s_state) {
     case MONITOR_STATE_IDLE:
       s_current_interval_sec = INTERVAL_MAX_SEC;
       s_next_wake_time_us = now_us + (int64_t)s_current_interval_sec * 1000000;
       s_state = MONITOR_STATE_SLEEP;
-      ESP_LOGI(TAG, "Task active, initial interval %d sec",
-               s_current_interval_sec);
+      ESP_LOGI(TAG, "IDLE->SLEEP, interval=%d sec", s_current_interval_sec);
       break;
-
     case MONITOR_STATE_SLEEP:
       if (now_us >= s_next_wake_time_us) {
+        ESP_LOGI(TAG, "Interval reached, WAIT_FACE");
         s_state = MONITOR_STATE_WAIT_FACE;
         s_face_wait_start_us = now_us;
-        ESP_LOGI(TAG, "Interval reached, waiting for face...");
       } else {
-        vTaskDelay(pdMS_TO_TICKS(1000));
+        int64_t remain_ms = (s_next_wake_time_us - now_us) / 1000;
+        vTaskDelay(pdMS_TO_TICKS((remain_ms > 1000) ? 1000 : remain_ms));
       }
       break;
-
     case MONITOR_STATE_WAIT_FACE:
-      if (face_detector_helper_has_recent_face(1000)) {
+      if (face_detector_helper_trigger_detection(100)) {
         int64_t wait_sec =
             (esp_timer_get_time() - s_face_wait_start_us) / 1000000;
-        ESP_LOGI(TAG, "Face detected after %lld sec", wait_sec);
+        ESP_LOGI(TAG, "Face detected after %lld sec -> CAPTURING", wait_sec);
         s_state = MONITOR_STATE_CAPTURING;
       } else {
         int64_t elapsed_sec =
             (esp_timer_get_time() - s_face_wait_start_us) / 1000000;
         if (elapsed_sec >= FACE_WAIT_TIMEOUT_SEC) {
-          ESP_LOGW(TAG, "Face wait timeout, skipping this cycle");
-          // 超时视为等待很长，拉长间隔
+          ESP_LOGW(TAG, "Face wait timeout, skip cycle");
           s_current_interval_sec =
               adjust_interval_by_face_wait(FACE_WAIT_SLOW_SEC);
           s_next_wake_time_us =
               esp_timer_get_time() + (int64_t)s_current_interval_sec * 1000000;
           s_state = MONITOR_STATE_SLEEP;
         } else {
-          vTaskDelay(pdMS_TO_TICKS(500));
+          vTaskDelay(pdMS_TO_TICKS(FACE_POLL_INTERVAL_MS));
         }
       }
       break;
-
     case MONITOR_STATE_CAPTURING: {
-      // 执行拍照入队
-      bool capture_ok = capture_and_enqueue();
-      int64_t wait_sec =
+      int64_t face_wait_sec =
           (esp_timer_get_time() - s_face_wait_start_us) / 1000000;
-
-      if (!capture_ok) {
-        // 拍照失败，视为异常，拉长间隔
-        ESP_LOGE(TAG, "Capture failed, increasing interval");
+      ESP_LOGI(TAG, "Capturing, face wait=%lld sec", face_wait_sec);
+      bool ok = capture_and_enqueue();
+      if (!ok) {
+        ESP_LOGE(TAG, "Capture failed");
         s_current_interval_sec += INTERVAL_STEP_SEC;
         if (s_current_interval_sec > INTERVAL_MAX_SEC)
           s_current_interval_sec = INTERVAL_MAX_SEC;
-      } else {
-        // 等待上传回调完成（最多等待 60 秒）
-        if (xSemaphoreTake(s_interval_sem, pdMS_TO_TICKS(60000)) == pdTRUE) {
-          if (s_upload_success) {
-            // 上传成功，根据人脸等待时间调整间隔
-            s_current_interval_sec = adjust_interval_by_face_wait(wait_sec);
-          } else {
-            // 上传失败，拉长间隔
-            ESP_LOGW(TAG, "Upload failed, increasing interval");
-            s_current_interval_sec += INTERVAL_STEP_SEC;
-            if (s_current_interval_sec > INTERVAL_MAX_SEC)
-              s_current_interval_sec = INTERVAL_MAX_SEC;
-          }
-        } else {
-          // 回调超时，拉长间隔
-          ESP_LOGW(TAG, "Upload callback timeout, increasing interval");
-          s_current_interval_sec += INTERVAL_STEP_SEC;
-          if (s_current_interval_sec > INTERVAL_MAX_SEC)
-            s_current_interval_sec = INTERVAL_MAX_SEC;
-        }
+        s_next_wake_time_us =
+            esp_timer_get_time() + (int64_t)s_current_interval_sec * 1000000;
+        s_state = MONITOR_STATE_SLEEP;
+        break;
       }
-
-      // 设置下次唤醒时间并回到睡眠
+      if (xSemaphoreTake(s_upload_done_sem,
+                         pdMS_TO_TICKS(UPLOAD_CALLBACK_TIMEOUT_MS)) == pdTRUE) {
+        s_current_interval_sec = adjust_interval_by_face_wait(face_wait_sec);
+      } else {
+        ESP_LOGW(TAG, "Upload/VLM timeout");
+        s_current_interval_sec += INTERVAL_STEP_SEC;
+        if (s_current_interval_sec > INTERVAL_MAX_SEC)
+          s_current_interval_sec = INTERVAL_MAX_SEC;
+      }
       s_next_wake_time_us =
           esp_timer_get_time() + (int64_t)s_current_interval_sec * 1000000;
       s_state = MONITOR_STATE_SLEEP;
-      ESP_LOGI(TAG, "Next wake in %d sec", s_current_interval_sec);
+      ESP_LOGI(TAG, "Cycle done, next wake in %d sec", s_current_interval_sec);
       break;
     }
+    default:
+      s_state = MONITOR_STATE_IDLE;
+      break;
     }
   }
 }
 
 void monitor_task_start(void) {
-  if (s_interval_sem == NULL) {
-    s_interval_sem = xSemaphoreCreateBinary();
+  if (s_upload_done_sem == NULL) {
+    s_upload_done_sem = xSemaphoreCreateBinary();
+    if (!s_upload_done_sem) {
+      ESP_LOGE(TAG, "Semaphore failed");
+      return;
+    }
   }
-  if (s_pause_sem == NULL) {
-    s_pause_sem = xSemaphoreCreateBinary();
+  if (s_monitor_mutex == NULL) {
+    s_monitor_mutex = xSemaphoreCreateMutex();
+    if (!s_monitor_mutex) {
+      ESP_LOGE(TAG, "Mutex failed");
+      return;
+    }
+  }
+  if (s_vlm_result_queue == NULL) {
+    s_vlm_result_queue = xQueueCreate(5, sizeof(vlm_result_msg_t));
+    if (!s_vlm_result_queue) {
+      ESP_LOGE(TAG, "Queue failed");
+      return;
+    }
   }
 
-  if (s_state_mutex == NULL) {
-    s_state_mutex = xSemaphoreCreateBinary();
+  // VLM 轮询任务：使用 PSRAM（不涉及文件写入）
+  if (s_vlm_poll_task_handle == NULL) {
+    size_t stack_words = VLM_POLL_STACK_SIZE / sizeof(StackType_t);
+    s_vlm_task_stack = (StackType_t *)heap_caps_malloc(
+        VLM_POLL_STACK_SIZE, MALLOC_CAP_SPIRAM | MALLOC_CAP_8BIT);
+    if (s_vlm_task_stack) {
+      s_vlm_poll_task_handle =
+          xTaskCreateStatic(vlm_poll_task_func, "vlm_poll", stack_words, NULL,
+                            3, s_vlm_task_stack, &s_vlm_task_tcb);
+      if (s_vlm_poll_task_handle) {
+        ESP_LOGI(TAG, "VLM poll task created (PSRAM stack, %d bytes)",
+                 VLM_POLL_STACK_SIZE);
+      } else {
+        heap_caps_free(s_vlm_task_stack);
+        s_vlm_task_stack = NULL;
+        xTaskCreate(vlm_poll_task_func, "vlm_poll", VLM_POLL_STACK_SIZE, NULL,
+                    3, &s_vlm_poll_task_handle);
+      }
+    } else {
+      xTaskCreate(vlm_poll_task_func, "vlm_poll", VLM_POLL_STACK_SIZE, NULL, 3,
+                  &s_vlm_poll_task_handle);
+    }
   }
-  xTaskCreate(monitor_task_func, "monitor", MONITOR_STACK_SIZE, NULL, 5,
-              &monitor_task_handle);
+
+  // 监控任务：必须使用内部 RAM（因为会写 LittleFS）
+  if (s_monitor_task_handle == NULL) {
+    BaseType_t ret =
+        xTaskCreate(monitor_task_func, "monitor", MONITOR_STACK_SIZE, NULL, 5,
+                    &s_monitor_task_handle);
+    if (ret != pdPASS) {
+      ESP_LOGE(TAG, "Monitor task creation failed");
+      return;
+    }
+    ESP_LOGI(TAG, "Monitor task created (internal SRAM, %d bytes)",
+             MONITOR_STACK_SIZE);
+  }
+
+  TEST_MEM_INFO(TAG);
+  ESP_LOGI(TAG, "Monitor system started");
 }
 
 void monitor_task_reset_timer(void) {
-  s_state = MONITOR_STATE_WAIT_FACE;
-  s_face_wait_start_us = esp_timer_get_time();
-  s_current_interval_sec = INTERVAL_MAX_SEC;
-  ESP_LOGI(TAG, "Timer reset, will capture immediately upon face detection");
+  if (s_monitor_mutex) {
+    xSemaphoreTake(s_monitor_mutex, portMAX_DELAY);
+    s_state = MONITOR_STATE_SLEEP;
+    s_next_wake_time_us = esp_timer_get_time() + 1000000LL;
+    s_current_interval_sec = INTERVAL_MAX_SEC;
+    xSemaphoreGive(s_monitor_mutex);
+    ESP_LOGI(TAG, "Timer reset with 1s delay before next wake");
+  }
 }
 
 void monitor_task_pause(void) {
-  xSemaphoreTake(s_state_mutex, portMAX_DELAY);
-  if (!s_paused) {
-    s_paused = true;
-    ESP_LOGI(TAG, "Monitor task paused");
-  }
-  xSemaphoreGive(s_state_mutex);
+  if (s_monitor_task_handle)
+    vTaskSuspend(s_monitor_task_handle);
 }
 
 void monitor_task_resume(void) {
-  xSemaphoreTake(s_state_mutex, portMAX_DELAY);
-  if (s_paused) {
-    s_paused = false;
-    ESP_LOGI(TAG, "Monitor task resumed");
-    xSemaphoreGive(s_pause_sem); // 唤醒挂起的任务
+  if (s_monitor_task_handle) {
+    monitor_task_reset_timer();
+    vTaskResume(s_monitor_task_handle);
   }
-  xSemaphoreGive(s_state_mutex);
 }

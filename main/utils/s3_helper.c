@@ -5,18 +5,25 @@
 #include "esp_timer.h"
 #include "freertos/FreeRTOS.h"
 #include "http_client_helper.h"
-#include "img_queue.h" // 替换为新的队列接口
+#include "img_queue.h"
 #include "nvs_helper.h"
 #include <freertos/task.h>
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
 
+#include "time_test_helper.h"
+
 #define DEVICE_ID 1
 static const char *TAG = "S3_helper";
 
 #define MAX_RETRY_LIMIT 5
 #define RETRY_BACKOFF_MS 5000
+#define UPLOADER_STACK_SIZE 6144 // 栈大小（字节），减小以节省内存
+
+static TaskHandle_t s_uploader_task_handle = NULL;
+static StaticTask_t s_uploader_task_tcb;
+static StackType_t *s_uploader_task_stack = NULL;
 
 static void rewrite_mdns_url(const char *original_url, char *out_url,
                              size_t out_len, const char *ip) {
@@ -25,12 +32,10 @@ static void rewrite_mdns_url(const char *original_url, char *out_url,
 
   if (pos && ip && strlen(ip) > 0) {
     size_t prefix_len = pos - original_url;
-    // 替换地址
     snprintf(out_url, out_len, "%.*s%s%s", (int)prefix_len, original_url, ip,
              pos + strlen(mdns_host));
     ESP_LOGI(TAG, "已接收预签名URL，拼接后的URL:%s", out_url);
   } else {
-    // 如果没找到域名或 IP 无效，原样拷贝
     strlcpy(out_url, original_url, out_len);
   }
 }
@@ -106,6 +111,8 @@ static void uploader_task(void *arg) {
       ESP_LOGE(TAG, "SPIRAM OOM");
       fclose(f);
       cJSON_Delete(root);
+      job.retry_count++;
+      img_queue_update_retry(job.retry_count);
       vTaskDelay(pdMS_TO_TICKS(RETRY_BACKOFF_MS));
       continue;
     }
@@ -143,8 +150,6 @@ static void uploader_task(void *arg) {
       if (task_id > 0)
         cJSON_AddNumberToObject(post, "taskId", task_id);
       cJSON_AddStringToObject(post, "imageKey", image_key);
-      // cJSON_AddNumberToObject(post, "timestamp", (double)time(NULL));
-
       char *json_str = cJSON_PrintUnformatted(post);
       post_success = http_post_json("/device/image/result", json_str);
       cJSON_Delete(post);
@@ -175,5 +180,30 @@ static void uploader_task(void *arg) {
 }
 
 void uploader_task_start(void) {
-  xTaskCreate(uploader_task, "uploader", 8192, NULL, 5, NULL);
+  if (s_uploader_task_handle != NULL)
+    return;
+
+  // 从 PSRAM 分配栈
+  s_uploader_task_stack = (StackType_t *)heap_caps_malloc(
+      UPLOADER_STACK_SIZE, MALLOC_CAP_SPIRAM | MALLOC_CAP_8BIT);
+  if (s_uploader_task_stack == NULL) {
+    ESP_LOGE(TAG, "Failed to allocate PSRAM stack for uploader task");
+    return;
+  }
+
+  size_t stack_depth = UPLOADER_STACK_SIZE / sizeof(StackType_t);
+  s_uploader_task_handle =
+      xTaskCreateStatic(uploader_task, "uploader", stack_depth, NULL, 5,
+                        s_uploader_task_stack, &s_uploader_task_tcb);
+
+  if (s_uploader_task_handle == NULL) {
+    ESP_LOGE(TAG, "Failed to create uploader task");
+    heap_caps_free(s_uploader_task_stack);
+    s_uploader_task_stack = NULL;
+    return;
+  }
+
+  ESP_LOGI(TAG, "Uploader task created with PSRAM stack, size %d bytes",
+           UPLOADER_STACK_SIZE);
+  TEST_MEM_INFO(TAG);
 }

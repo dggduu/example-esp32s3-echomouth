@@ -52,23 +52,24 @@ static void on_start_click(lv_event_t *e) {
     load_and_render(); // 刷新列表以更新状态
   } else {
     // 如果失败，可能是网络问题或已有任务在运行
-    gs_toast_show("请先完成一开始的任务",GS_TOAST_FAILED
-  });
+    gs_toast_show("请先完成一开始的任务", GS_TOAST_FAILED);
+  }
 }
-}
+
+extern const gs_page_desc_t page_cam;
 
 static void on_complete_click(lv_event_t *e) {
   int index = (int)(intptr_t)lv_event_get_user_data(e);
   int task_id = s_ctx.tasks[index].id;
 
+  gs_nav_push(&page_cam, task_id);
+
   if (task_manager_complete(task_id)) {
-    gs_toast_show("任务成功标记完成",GS_TOAST_SUCCESS
-  });
-  load_and_render();
-}
-else {
-  gs_toast_show("任务提交失败，请重试", GS_TOAST_FAILED);
-}
+    gs_toast_show("任务成功标记完成", GS_TOAST_SUCCESS);
+    load_and_render();
+  } else {
+    gs_toast_show("任务提交失败，请重试", GS_TOAST_FAILED);
+  }
 }
 
 /* ================= UI 渲染逻辑 ================= */
@@ -116,7 +117,7 @@ static void render_list(page_todo_ctx_t *ctx) {
 
     lv_obj_t *lbl_title = lv_label_create(header);
     lv_label_set_text(lbl_title, item_data->title);
-    lv_obj_set_style_text_font(lbl_title, &chinese_font_14px 0);
+    lv_obj_set_style_text_font(lbl_title, &chinese_font_14px, 0);
 
     lv_obj_t *lbl_status = lv_label_create(header);
     lv_label_set_text(lbl_status, item_data->status);

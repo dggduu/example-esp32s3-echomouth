@@ -160,6 +160,7 @@ bool http_put_binary(const char *url, uint8_t *data, int len) {
   esp_http_client_set_header(client, "Host", "aobara-pc.local:9000");
   esp_http_client_set_header(client, "Content-Type", "image/jpeg");
 
+  
   esp_http_client_set_post_field(client, (const char *)data, len);
 
   esp_err_t err = esp_http_client_perform(client);

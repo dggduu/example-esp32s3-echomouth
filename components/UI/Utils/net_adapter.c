@@ -17,6 +17,11 @@
 #define PENDING_BUF_SIZE 1024
 #define RX_RINGBUF_SIZE (1024 * 8)
 
+// 任务栈大小（字节）
+#define NET_TX_STACK_SIZE 8192     // 原 4096
+#define NET_RX_STACK_SIZE 8192     // 原 4096
+#define NET_RECONN_STACK_SIZE 6144 // 原 4096
+
 static const char *TAG = "NET_ADAPTER";
 
 static esp_websocket_client_handle_t g_ws_client = NULL;
@@ -27,6 +32,14 @@ static net_status_callback_t g_user_status_cb = NULL;
 static TaskHandle_t g_tx_task_handle = NULL;
 static TaskHandle_t g_rx_task_handle = NULL;
 static TaskHandle_t g_reconnect_task_handle = NULL;
+
+// 静态任务控制块和栈缓冲区（PSRAM分配）
+static StaticTask_t s_tx_task_tcb;
+static StackType_t *s_tx_task_stack = NULL;
+static StaticTask_t s_rx_task_tcb;
+static StackType_t *s_rx_task_stack = NULL;
+static StaticTask_t s_reconn_task_tcb;
+static StackType_t *s_reconn_task_stack = NULL;
 
 typedef struct {
   uint8_t *data;
@@ -124,6 +137,7 @@ static void ws_event_handler(void *handler_args, esp_event_base_t base,
 /* ---------- 发送任务 ---------- */
 static void net_tx_task(void *pvParameters) {
   tx_msg_t msg;
+  ESP_LOGI(TAG, "net_tx_task started");
   while (1) {
     if (xQueueReceive(g_tx_queue, &msg, portMAX_DELAY) == pdPASS) {
       bool ready;
@@ -147,6 +161,7 @@ static void net_tx_task(void *pvParameters) {
 static void net_rx_task(void *pvParameters) {
   static uint8_t packet_buf[1024];
   int rx_idx = 0;
+  ESP_LOGI(TAG, "net_rx_task started");
 
   while (1) {
     size_t item_size;
@@ -183,12 +198,10 @@ static void net_rx_task(void *pvParameters) {
                 }
               }
 
-              // 统一交给聊天服务处理（内部根据模式决定是显示 toast
-              // 还是更新窗口）
+              // 统一交给聊天服务处理
               chat_service_handle_packet(&pkt);
             } else {
               ESP_LOGE(TAG, "CRC Error or invalid packet");
-              // 可打印原始十六进制辅助调试
               ESP_LOG_BUFFER_HEX("RX_ERR", packet_buf, total_len);
             }
             rx_idx = 0;
@@ -206,6 +219,7 @@ static void net_rx_task(void *pvParameters) {
 static void reconnect_task(void *pvParameters) {
   const net_config_t *cfg = (const net_config_t *)pvParameters;
   const int retry_interval_ms = 5000;
+  ESP_LOGI(TAG, "reconnect_task started");
   while (1) {
     bool ready;
     xSemaphoreTake(g_ws_mutex, portMAX_DELAY);
@@ -246,10 +260,76 @@ void net_adapter_init(const net_config_t *cfg) {
   g_tx_queue = xQueueCreate(PENDING_QUEUE_SIZE, sizeof(tx_msg_t));
   g_rx_ringbuf = xRingbufferCreate(RX_RINGBUF_SIZE, RINGBUF_TYPE_BYTEBUF);
 
-  xTaskCreate(net_tx_task, "net_tx", 4096, NULL, 6, &g_tx_task_handle);
-  xTaskCreate(net_rx_task, "net_rx", 4096, NULL, 6, &g_rx_task_handle);
-  xTaskCreate(reconnect_task, "net_reconn", 4096, (void *)&g_active_cfg, 5,
-              &g_reconnect_task_handle);
+  // 创建发送任务（PSRAM栈）
+  if (g_tx_task_handle == NULL) {
+    s_tx_task_stack = (StackType_t *)heap_caps_malloc(
+        NET_TX_STACK_SIZE, MALLOC_CAP_SPIRAM | MALLOC_CAP_8BIT);
+    if (s_tx_task_stack) {
+      size_t depth = NET_TX_STACK_SIZE / sizeof(StackType_t);
+      g_tx_task_handle = xTaskCreateStatic(net_tx_task, "net_tx", depth, NULL,
+                                           6, s_tx_task_stack, &s_tx_task_tcb);
+      if (g_tx_task_handle) {
+        ESP_LOGI(TAG, "net_tx task created with PSRAM stack, size %d",
+                 NET_TX_STACK_SIZE);
+      } else {
+        heap_caps_free(s_tx_task_stack);
+        s_tx_task_stack = NULL;
+        // 回退到动态创建
+        xTaskCreate(net_tx_task, "net_tx", NET_TX_STACK_SIZE, NULL, 6,
+                    &g_tx_task_handle);
+      }
+    } else {
+      xTaskCreate(net_tx_task, "net_tx", NET_TX_STACK_SIZE, NULL, 6,
+                  &g_tx_task_handle);
+    }
+  }
+
+  // 创建接收任务（PSRAM栈）
+  if (g_rx_task_handle == NULL) {
+    s_rx_task_stack = (StackType_t *)heap_caps_malloc(
+        NET_RX_STACK_SIZE, MALLOC_CAP_SPIRAM | MALLOC_CAP_8BIT);
+    if (s_rx_task_stack) {
+      size_t depth = NET_RX_STACK_SIZE / sizeof(StackType_t);
+      g_rx_task_handle = xTaskCreateStatic(net_rx_task, "net_rx", depth, NULL,
+                                           6, s_rx_task_stack, &s_rx_task_tcb);
+      if (g_rx_task_handle) {
+        ESP_LOGI(TAG, "net_rx task created with PSRAM stack, size %d",
+                 NET_RX_STACK_SIZE);
+      } else {
+        heap_caps_free(s_rx_task_stack);
+        s_rx_task_stack = NULL;
+        xTaskCreate(net_rx_task, "net_rx", NET_RX_STACK_SIZE, NULL, 6,
+                    &g_rx_task_handle);
+      }
+    } else {
+      xTaskCreate(net_rx_task, "net_rx", NET_RX_STACK_SIZE, NULL, 6,
+                  &g_rx_task_handle);
+    }
+  }
+
+  // 创建重连任务（PSRAM栈）
+  if (g_reconnect_task_handle == NULL) {
+    s_reconn_task_stack = (StackType_t *)heap_caps_malloc(
+        NET_RECONN_STACK_SIZE, MALLOC_CAP_SPIRAM | MALLOC_CAP_8BIT);
+    if (s_reconn_task_stack) {
+      size_t depth = NET_RECONN_STACK_SIZE / sizeof(StackType_t);
+      g_reconnect_task_handle = xTaskCreateStatic(
+          reconnect_task, "net_reconn", depth, (void *)&g_active_cfg, 5,
+          s_reconn_task_stack, &s_reconn_task_tcb);
+      if (g_reconnect_task_handle) {
+        ESP_LOGI(TAG, "net_reconn task created with PSRAM stack, size %d",
+                 NET_RECONN_STACK_SIZE);
+      } else {
+        heap_caps_free(s_reconn_task_stack);
+        s_reconn_task_stack = NULL;
+        xTaskCreate(reconnect_task, "net_reconn", NET_RECONN_STACK_SIZE,
+                    (void *)&g_active_cfg, 5, &g_reconnect_task_handle);
+      }
+    } else {
+      xTaskCreate(reconnect_task, "net_reconn", NET_RECONN_STACK_SIZE,
+                  (void *)&g_active_cfg, 5, &g_reconnect_task_handle);
+    }
+  }
 }
 
 void net_ws_send(const uint8_t *data, size_t len) {
@@ -269,9 +349,6 @@ void net_ws_send(const uint8_t *data, size_t len) {
     ESP_LOGW(TAG, "TX Queue full, drop");
     free(msg.data);
   }
-
-  // ESP_LOGI(TAG, "TX send packet");
-  // print_protocol_packet((protocol_packet_t *)&msg);
 }
 
 bool net_is_connected(void) {

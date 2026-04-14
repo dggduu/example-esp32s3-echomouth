@@ -67,11 +67,6 @@ static void chat_update_cb(void *ctx) {
 }
 
 static void chat_deinit_cb(void *ctx) {
-  // 退出聊天页面，切换回 HOME 模式
-  // if (protocol_get_mode() != DEVICE_MODE_HOME) {
-  //   protocol_send_mode_switch(DEVICE_MODE_HOME);
-  //   protocol_switch_mode(DEVICE_MODE_HOME);
-  // }
   chat_exit_chat();
   // 恢复默认网络状态回调（Toast）
   net_reset_status_callback();
