@@ -310,8 +310,7 @@ void app_main(void) {
     vTaskDelay(pdMS_TO_TICKS(1000));
     query_mdns_host("aobara-pc");
 
-    // bsp_camera_init();
-    cam_helper_acquire();
+    bsp_camera_init();
     face_detector_helper_init(320, 240);
 
     if (face_detector_helper_trigger_detection(1000)) {

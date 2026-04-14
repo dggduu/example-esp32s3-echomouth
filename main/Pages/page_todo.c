@@ -63,9 +63,6 @@ extern const gs_page_desc_t page_cam;
 static void on_complete_click(lv_event_t *e) {
   int index = (int)(intptr_t)lv_event_get_user_data(e);
   int task_id = s_ctx.tasks[index].id;
-
-  
-
   gs_nav_push(&page_cam, &task_id);
 }
 
