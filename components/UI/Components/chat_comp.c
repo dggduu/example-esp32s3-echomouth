@@ -87,14 +87,13 @@ static void async_render_window(void *dummy) { render_window(); }
 static void on_chat_dirty() { lv_async_call(async_render_window, NULL); }
 
 lv_obj_t *chat_comp_create(lv_obj_t *parent) {
-  ESP_LOGI(TAG, "Creating chat component v9.5.0"); // 解决 TAG unused 警告
   chat_service_init();
 
   s_root = lv_obj_create(parent);
   lv_obj_set_size(s_root, LV_PCT(100), LV_PCT(100));
   lv_obj_set_flex_flow(s_root, LV_FLEX_FLOW_COLUMN);
   lv_obj_set_style_pad_all(s_root, 0, 0);
-  lv_obj_set_style_pad_row(s_root, 0, 0); // v9 正确函数名
+  lv_obj_set_style_pad_row(s_root, 0, 0);
 
   /* Header */
   lv_obj_t *header = lv_obj_create(s_root);
@@ -109,12 +108,12 @@ lv_obj_t *chat_comp_create(lv_obj_t *parent) {
   lv_obj_center(exit_icon);
   lv_obj_add_event_cb(exit_btn, chat_exit_cb, LV_EVENT_CLICKED, NULL);
 
-  /* Chat viewport */
+  /* Chat */
   s_chat_viewport = lv_obj_create(s_root);
   lv_obj_set_size(s_chat_viewport, LV_PCT(100), LV_PCT(74));
   lv_obj_set_flex_flow(s_chat_viewport, LV_FLEX_FLOW_COLUMN);
   lv_obj_set_style_pad_all(s_chat_viewport, 8, 0);
-  lv_obj_set_style_pad_row(s_chat_viewport, 8, 0); // v9 正确函数名
+  lv_obj_set_style_pad_row(s_chat_viewport, 8, 0);
   lv_obj_set_style_bg_color(s_chat_viewport, lv_color_hex(0xF0F0F0), 0);
 
   for (int i = 0; i < CHAT_WINDOW_SIZE; i++) {
@@ -145,7 +144,7 @@ lv_obj_t *chat_comp_create(lv_obj_t *parent) {
   lv_obj_set_style_pad_all(footer, 4, 0);
   lv_obj_set_flex_align(footer, LV_FLEX_ALIGN_START, LV_FLEX_ALIGN_CENTER,
                         LV_FLEX_ALIGN_CENTER);
-  lv_obj_set_style_pad_column(footer, 5, 0); // 设置底部按钮之间的列间距
+  lv_obj_set_style_pad_column(footer, 5, 0);
 
   s_textarea = lv_textarea_create(footer);
   lv_obj_set_flex_grow(s_textarea, 1);
@@ -167,7 +166,7 @@ lv_obj_t *chat_comp_create(lv_obj_t *parent) {
     lv_obj_add_event_cb(b, btns[i].cb, LV_EVENT_CLICKED, NULL);
   }
 
-  /* Keyboard & IME */
+  /* Keyboard */
   lv_obj_t *kb = lv_keyboard_create(lv_screen_active());
   lv_obj_add_flag(kb, LV_OBJ_FLAG_HIDDEN);
   lv_obj_t *pinyin_ime = lv_ime_pinyin_create(lv_screen_active());

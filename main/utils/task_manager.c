@@ -78,6 +78,20 @@ bool task_manager_fetch_list(page_todo_ctx_t *ctx) {
     snprintf(t->desc, sizeof(t->desc), "%s", desc ? desc : "");
     snprintf(t->status, sizeof(t->status), "%s", status ? status : "");
 
+    cJSON *deadline_obj = cJSON_GetObjectItem(item, "deadline");
+    if (cJSON_IsNumber(deadline_obj)) {
+      t->deadline = (int64_t)deadline_obj->valuedouble;
+    } else {
+      t->deadline = 0;
+    }
+
+    cJSON *likes_obj = cJSON_GetObjectItem(item, "likes");
+    if (cJSON_IsNumber(likes_obj)) {
+      t->likes = likes_obj->valueint;
+    } else {
+      t->likes = 0;
+    }
+
     ctx->task_count++;
   }
 

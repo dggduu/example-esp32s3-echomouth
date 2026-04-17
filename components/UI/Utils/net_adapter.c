@@ -17,10 +17,9 @@
 #define PENDING_BUF_SIZE 1024
 #define RX_RINGBUF_SIZE (1024 * 8)
 
-// 任务栈大小（字节）
-#define NET_TX_STACK_SIZE 8192     // 原 4096
-#define NET_RX_STACK_SIZE 8192     // 原 4096
-#define NET_RECONN_STACK_SIZE 6144 // 原 4096
+#define NET_TX_STACK_SIZE 8192
+#define NET_RX_STACK_SIZE 8192
+#define NET_RECONN_STACK_SIZE 6144
 
 static const char *TAG = "NET_ADAPTER";
 
@@ -33,7 +32,6 @@ static TaskHandle_t g_tx_task_handle = NULL;
 static TaskHandle_t g_rx_task_handle = NULL;
 static TaskHandle_t g_reconnect_task_handle = NULL;
 
-// 静态任务控制块和栈缓冲区（PSRAM分配）
 static StaticTask_t s_tx_task_tcb;
 static StackType_t *s_tx_task_stack = NULL;
 static StaticTask_t s_rx_task_tcb;
@@ -260,7 +258,7 @@ void net_adapter_init(const net_config_t *cfg) {
   g_tx_queue = xQueueCreate(PENDING_QUEUE_SIZE, sizeof(tx_msg_t));
   g_rx_ringbuf = xRingbufferCreate(RX_RINGBUF_SIZE, RINGBUF_TYPE_BYTEBUF);
 
-  // 创建发送任务（PSRAM栈）
+  // 创建发送任务
   if (g_tx_task_handle == NULL) {
     s_tx_task_stack = (StackType_t *)heap_caps_malloc(
         NET_TX_STACK_SIZE, MALLOC_CAP_SPIRAM | MALLOC_CAP_8BIT);
@@ -274,7 +272,6 @@ void net_adapter_init(const net_config_t *cfg) {
       } else {
         heap_caps_free(s_tx_task_stack);
         s_tx_task_stack = NULL;
-        // 回退到动态创建
         xTaskCreate(net_tx_task, "net_tx", NET_TX_STACK_SIZE, NULL, 6,
                     &g_tx_task_handle);
       }
@@ -284,7 +281,7 @@ void net_adapter_init(const net_config_t *cfg) {
     }
   }
 
-  // 创建接收任务（PSRAM栈）
+  // 创建接收任务
   if (g_rx_task_handle == NULL) {
     s_rx_task_stack = (StackType_t *)heap_caps_malloc(
         NET_RX_STACK_SIZE, MALLOC_CAP_SPIRAM | MALLOC_CAP_8BIT);
@@ -307,7 +304,7 @@ void net_adapter_init(const net_config_t *cfg) {
     }
   }
 
-  // 创建重连任务（PSRAM栈）
+  // 创建重连任务
   if (g_reconnect_task_handle == NULL) {
     s_reconn_task_stack = (StackType_t *)heap_caps_malloc(
         NET_RECONN_STACK_SIZE, MALLOC_CAP_SPIRAM | MALLOC_CAP_8BIT);

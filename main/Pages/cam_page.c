@@ -42,19 +42,16 @@ static uint8_t *preview_buf = NULL;
 static camera_fb_t *captured_fb = NULL;
 
 static TaskHandle_t fetch_task_handle = NULL;
-// static button_handle_t btn;
+
 static lv_obj_t *state_label = NULL;
 
-/* 预览帧尺寸 */
 #define PREVIEW_W 160
 #define PREVIEW_H 120
 #define SRC_W 320
 #define SRC_H 240
 
-/* 临时 YUV 缓冲区，由预览任务独占管理，外部只读 */
 static uint8_t *temp_yuv_buf = NULL;
 
-/* 任务停止标志 */
 static volatile bool s_stop_fetch = false;
 
 static void update_state_label(void) {
@@ -72,9 +69,8 @@ static void manual_upload_complete(bool success, const char *image_key,
   if (!user_data)
     return;
 
-  // 1. 先转回发送时传入的真实类型
   upload_user_ctx_t *u_ctx = (upload_user_ctx_t *)user_data;
-  // 2. 从包装结构中提取 UI 上下文
+
   cam_shared_ctx_t *ctx = (cam_shared_ctx_t *)u_ctx->callback_ctx;
 
   if (ctx) {
@@ -84,12 +80,11 @@ static void manual_upload_complete(bool success, const char *image_key,
       strlcpy(ctx->image_key, image_key, sizeof(ctx->image_key));
     }
     if (ctx->done_sem) {
-      xSemaphoreGive(ctx->done_sem); // 现在地址正确了
+      xSemaphoreGive(ctx->done_sem);
     }
   }
 }
 
-/* 从 YUV 源缓冲区下采样到 RGB565 preview 缓冲区 */
 static void downsample_from_buffer(uint8_t *src, int src_w, int src_h,
                                    uint8_t *dst) {
   if (!src || !dst)
@@ -153,19 +148,16 @@ static void downsample_from_buffer(uint8_t *src, int src_w, int src_h,
   }
 }
 
-/* 兼容旧接口 */
 static void downsample_2x_simd_optimized(camera_fb_t *fb) {
   if (!fb || !preview_buf)
     return;
   downsample_from_buffer(fb->buf, fb->width, fb->height, preview_buf);
 }
 
-/* 预览任务（独占 temp_yuv_buf 的管理） */
 static void cam_fetch_task(void *arg) {
   bool src_set = false;
   ESP_LOGI(TAG, "Fetch task started");
 
-  // 分配临时缓冲区，任务独自管理
   uint8_t *local_temp = heap_caps_malloc(SRC_W * SRC_H * 2, MALLOC_CAP_SPIRAM);
   if (!local_temp) {
     ESP_LOGE(TAG, "Failed to allocate temp YUV buffer");
@@ -173,10 +165,8 @@ static void cam_fetch_task(void *arg) {
     vTaskDelete(NULL);
     return;
   }
-  temp_yuv_buf =
-      local_temp; // 全局可见，供外部（如deinit）参考，但释放由本任务负责
+  temp_yuv_buf = local_temp;
 
-  // 快速获取首帧
   for (int retry = 0; retry < 5 && !s_stop_fetch; retry++) {
     camera_fb_t *fb = esp_camera_fb_get();
     if (fb) {
@@ -188,7 +178,6 @@ static void cam_fetch_task(void *arg) {
     vTaskDelay(pdMS_TO_TICKS(20));
   }
 
-  // 主循环
   while (!s_stop_fetch) {
     if (!img_obj || s_state != CAM_STATE_PREVIEW) {
       vTaskDelay(pdMS_TO_TICKS(50));
@@ -201,14 +190,12 @@ static void cam_fetch_task(void *arg) {
       continue;
     }
 
-    // 拷贝数据
     memcpy(local_temp, fb->buf, fb->len);
-    // 立即归还
+
     esp_camera_fb_return(fb);
-    // 下采样
+
     downsample_from_buffer(local_temp, SRC_W, SRC_H, preview_buf);
 
-    // 刷新UI
     if (lvgl_port_lock(pdMS_TO_TICKS(20))) {
       if (!src_set) {
         lv_image_set_src(img_obj, &img_dsc);
@@ -221,7 +208,6 @@ static void cam_fetch_task(void *arg) {
     vTaskDelay(pdMS_TO_TICKS(30));
   }
 
-  // 任务退出前清理自己的资源
   if (local_temp) {
     heap_caps_free(local_temp);
     temp_yuv_buf = NULL;
@@ -300,11 +286,13 @@ static void cam_save_picture(void) {
 
         static upload_user_ctx_t user_ctx;
         user_ctx.type = UPLOAD_TYPE_MANUAL;
-        user_ctx.device_id = 1; // TODO: 从 NVS 读取
+        user_ctx.device_id = s_shared_ctx->device_id;
         user_ctx.task_id = s_shared_ctx->task_id;
         user_ctx.callback_ctx = s_shared_ctx;
         job.user_data = &user_ctx;
 
+        ESP_LOGD(TAG, "did:%d, task_id:%d", user_ctx.device_id,
+                 user_ctx.task_id);
         if (img_queue_push(&job)) {
           ESP_LOGI(TAG, "Manual upload queued: %s", path);
 
@@ -369,8 +357,14 @@ static lv_obj_t *create_text_btn(lv_obj_t *parent, const char *text,
   return btn;
 }
 
-/* --------------------- 页面生命周期 --------------------- */
 static void *page_cam_init(void *args) {
+  if (args == NULL) {
+    ESP_LOGE(TAG, "Invalid args: cam_page_args_t required");
+    return NULL;
+  }
+
+  cam_page_args_t *page_args = (cam_page_args_t *)args;
+
   if (s_shared_ctx == NULL) {
     s_shared_ctx =
         heap_caps_calloc(1, sizeof(cam_shared_ctx_t), MALLOC_CAP_INTERNAL);
@@ -380,15 +374,10 @@ static void *page_cam_init(void *args) {
     }
   }
 
-  if (args == NULL) {
-    ESP_LOGE(TAG, "Invalid args: task_id not provided");
-    return NULL;
-  }
-
   monitor_task_pause();
-  s_shared_ctx->task_id = *(int *)args;
+  s_shared_ctx->task_id = page_args->task_id;
+  s_shared_ctx->device_id = page_args->device_id;
 
-  // 创建/重置信号量
   if (s_shared_ctx->done_sem == NULL) {
     s_shared_ctx->done_sem = xSemaphoreCreateBinary();
     if (s_shared_ctx->done_sem == NULL) {
@@ -396,9 +385,8 @@ static void *page_cam_init(void *args) {
       return NULL;
     }
   }
-  xSemaphoreTake(s_shared_ctx->done_sem, 0); // 确保初始为空
+  xSemaphoreTake(s_shared_ctx->done_sem, 0);
 
-  // 分配预览缓冲区
   if (preview_buf) {
     heap_caps_free(preview_buf);
     preview_buf = NULL;
@@ -411,7 +399,6 @@ static void *page_cam_init(void *args) {
   }
   memset(preview_buf, 0x00, PREVIEW_W * PREVIEW_H * 2);
 
-  // 设置图像描述符
   img_dsc.header.cf = LV_COLOR_FORMAT_RGB565_SWAPPED;
   img_dsc.header.w = PREVIEW_W;
   img_dsc.header.h = PREVIEW_H;
@@ -419,7 +406,6 @@ static void *page_cam_init(void *args) {
   img_dsc.data_size = PREVIEW_W * PREVIEW_H * 2;
   img_dsc.data = preview_buf;
 
-  // 如果有旧任务残留，强制清理
   if (fetch_task_handle != NULL) {
     s_stop_fetch = true;
     int timeout = 50;
@@ -466,7 +452,6 @@ static lv_obj_t *page_cam_render(lv_obj_t *parent, void *ctx) {
   create_text_btn(btn_cont, "保存", on_btn_save_photo);
   create_text_btn(btn_cont, "预览", on_btn_back_to_preview);
 
-  // 渲染完成后启动预览任务
   s_stop_fetch = false;
   if (fetch_task_handle == NULL) {
     BaseType_t ret = xTaskCreate(cam_fetch_task, "cam_fetch", 3072, NULL, 4,
@@ -480,10 +465,9 @@ static lv_obj_t *page_cam_render(lv_obj_t *parent, void *ctx) {
 }
 
 static void page_cam_deinit(void *ctx) {
-  // 通知预览任务停止
+
   s_stop_fetch = true;
 
-  // 等待任务退出（最多500ms）
   int timeout = 50;
   while (fetch_task_handle != NULL && timeout-- > 0) {
     vTaskDelay(pdMS_TO_TICKS(10));
@@ -495,12 +479,11 @@ static void page_cam_deinit(void *ctx) {
   }
 
   if (temp_yuv_buf != NULL) {
-    // 极端情况：任务未运行或异常退出，手动释放
+
     heap_caps_free(temp_yuv_buf);
     temp_yuv_buf = NULL;
   }
 
-  // 清理其他资源
   if (captured_fb) {
     esp_camera_fb_return(captured_fb);
     captured_fb = NULL;
@@ -509,7 +492,7 @@ static void page_cam_deinit(void *ctx) {
     heap_caps_free(preview_buf);
     preview_buf = NULL;
   }
-  img_dsc.data = NULL; // 防止野指针
+  img_dsc.data = NULL;
 
   if (s_shared_ctx && s_shared_ctx->done_sem) {
     vSemaphoreDelete(s_shared_ctx->done_sem);

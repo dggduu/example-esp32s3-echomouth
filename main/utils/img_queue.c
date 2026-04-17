@@ -4,12 +4,11 @@
 #include <stdio.h>
 #include <string.h>
 
-
 #define MAX_QUEUE_SIZE 5
 
 typedef struct {
   img_job_t jobs[MAX_QUEUE_SIZE];
-  int count; // 当前任务数量，jobs[0..count-1] 为有效元素
+  int count;
   SemaphoreHandle_t mutex;
 } img_queue_t;
 
@@ -20,23 +19,21 @@ void img_queue_init(void) {
   s_queue.mutex = xSemaphoreCreateMutex();
 }
 
-// 在有序数组中按优先级降序插入（优先级值越小越靠前）
 static bool insert_sorted(const img_job_t *job) {
   if (s_queue.count >= MAX_QUEUE_SIZE)
     return false;
 
   int insert_pos = 0;
-  // 找到第一个优先级比新任务低的位置（即新任务应该插入的位置）
+
   while (insert_pos < s_queue.count &&
          s_queue.jobs[insert_pos].priority <= job->priority) {
     insert_pos++;
   }
 
-  // 后移元素
   for (int i = s_queue.count; i > insert_pos; i--) {
     memcpy(&s_queue.jobs[i], &s_queue.jobs[i - 1], sizeof(img_job_t));
   }
-  // 插入
+
   memcpy(&s_queue.jobs[insert_pos], job, sizeof(img_job_t));
   s_queue.count++;
   return true;
@@ -79,7 +76,6 @@ bool img_queue_commit(void) {
     return false;
   }
 
-  // 弹出队首，后续元素前移
   for (int i = 0; i < s_queue.count - 1; i++) {
     memcpy(&s_queue.jobs[i], &s_queue.jobs[i + 1], sizeof(img_job_t));
   }

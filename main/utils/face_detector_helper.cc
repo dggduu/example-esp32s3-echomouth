@@ -12,58 +12,47 @@
 
 static const char *TAG = "face_detector";
 
-// 检测任务句柄
 static TaskHandle_t g_detector_task = NULL;
 
-// 触发信号量：外部调用触发一次检测
 static SemaphoreHandle_t g_trigger_sem = NULL;
-// 完成信号量：检测完成后释放，用于同步等待
+
 static SemaphoreHandle_t g_done_sem = NULL;
 
-// 检测结果（受互斥锁保护）
 static int g_last_face_count = 0;
 static bool g_detection_success = false;
-static int64_t g_last_face_detected_us = 0; // 上次检测到人脸的时间戳
+static int64_t g_last_face_detected_us = 0;
 
-// 标志：任务是否正在处理中（原子操作）
 static std::atomic<bool> g_is_processing{false};
 
-// 互斥锁保护共享数据（时间戳和计数）
 static SemaphoreHandle_t g_data_mutex = NULL;
 
-// 预分配的 RGB 缓冲区（复用）
 static uint8_t *g_rgb_buf = nullptr;
 static size_t g_rgb_buf_size = 0;
 static int g_fb_width = 0;
 static int g_fb_height = 0;
 
-// 推理核心任务（单次执行模式）
 static void detector_task(void *arg) {
-  // 创建检测器实例（只创建一次）
+
   HumanFaceDetectMSR01 detector(0.3F, 0.3F, 10, 0.3F);
 
   while (1) {
-    // 等待触发信号
+
     if (xSemaphoreTake(g_trigger_sem, portMAX_DELAY) == pdTRUE) {
       g_is_processing.store(true, std::memory_order_release);
 
-      // 临时结果变量
       int face_count = 0;
       bool detection_ok = false;
       int64_t now_us = 0;
 
-      // 获取一帧相机图像
       camera_fb_t *fb = esp_camera_fb_get();
       if (fb && fb->format == PIXFORMAT_YUV422) {
-        // 检查缓冲区是否足够
+
         size_t required_size = fb->width * fb->height * 3;
         if (g_rgb_buf && g_rgb_buf_size >= required_size &&
             fb->width == g_fb_width && fb->height == g_fb_height) {
 
-          // YUV422 -> RGB888 转换
           fmt2rgb888(fb->buf, fb->len, fb->format, g_rgb_buf);
 
-          // 执行推理
           auto &results =
               detector.infer(g_rgb_buf, {(int)fb->height, (int)fb->width, 3});
           face_count = results.size();
@@ -85,7 +74,6 @@ static void detector_task(void *arg) {
       if (fb)
         esp_camera_fb_return(fb);
 
-      // 更新共享数据（加锁）
       if (g_data_mutex) {
         xSemaphoreTake(g_data_mutex, portMAX_DELAY);
         g_last_face_count = face_count;
@@ -98,7 +86,6 @@ static void detector_task(void *arg) {
 
       g_is_processing.store(false, std::memory_order_release);
 
-      // 通知等待者检测已完成
       xSemaphoreGive(g_done_sem);
     }
   }
@@ -106,19 +93,17 @@ static void detector_task(void *arg) {
 
 extern "C" bool face_detector_helper_init(int fb_width, int fb_height) {
   if (g_detector_task != NULL) {
-    return true; // 已经初始化
+    return true;
   }
 
-  // 保存分辨率，用于缓冲区分配
   g_fb_width = fb_width;
   g_fb_height = fb_height;
 
-  // 分配 RGB 缓冲区（PSRAM 优先）
   size_t buf_size = fb_width * fb_height * 3;
   g_rgb_buf = (uint8_t *)heap_caps_malloc(buf_size,
                                           MALLOC_CAP_SPIRAM | MALLOC_CAP_8BIT);
   if (!g_rgb_buf) {
-    // 尝试内部 RAM
+
     g_rgb_buf = (uint8_t *)heap_caps_malloc(buf_size, MALLOC_CAP_INTERNAL |
                                                           MALLOC_CAP_8BIT);
     if (!g_rgb_buf) {
@@ -183,18 +168,14 @@ extern "C" bool face_detector_helper_trigger_detection(uint32_t timeout_ms) {
   if (g_detector_task == NULL)
     return false;
 
-  // 如果正在处理中，直接返回 false（调用方可选择稍后重试）
   if (g_is_processing.load(std::memory_order_acquire)) {
     return false;
   }
 
-  // 先清空可能残留的完成信号量（防止上次未取走）
   xSemaphoreTake(g_done_sem, 0);
 
-  // 触发检测
   xSemaphoreGive(g_trigger_sem);
 
-  // 等待检测完成
   if (xSemaphoreTake(g_done_sem, pdMS_TO_TICKS(timeout_ms)) == pdTRUE) {
     bool success = false;
     if (g_data_mutex) {

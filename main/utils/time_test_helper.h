@@ -10,7 +10,6 @@
 
 #include "monitor_mamager.h"
 #include "task_manager.h"
-// 颜色定义，方便在终端区分
 #define LOG_CLR_RESET "\033[0m"
 #define LOG_CLR_CYAN "\033[0;36m"
 #define LOG_CLR_PURPLE "\033[0;35m"
@@ -45,7 +44,7 @@
   } while (0)
 
 /**
- * @brief 检查指针是否在PSRAM中 (汽车级开发常用，防止将PSRAM传给不支持的硬件)
+ * @brief 检查指针是否在PSRAM中
  */
 #define CHECK_IS_PSRAM(ptr)                                                    \
   do {                                                                         \

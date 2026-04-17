@@ -144,7 +144,6 @@ void gs_nav_push_async(const gs_page_desc_t *page, void *args) {
   if (payload) {
     payload->page = page;
     payload->args = args;
-    // lv_async_call 会在下一个 lv_timer_handler 执行时在 GUI 线程调用回调
     lv_async_call(gs_nav_push_async_cb, payload);
   }
 }

@@ -24,12 +24,11 @@
 #define MONITOR_STACK_SIZE 4096
 #define VLM_POLL_STACK_SIZE 4096
 
-// 间隔边界（秒）
 #define INTERVAL_MIN_SEC (60 * 1)
 #define INTERVAL_MAX_SEC (60 * 30)
 
-#define FACE_WAIT_FAST_SEC 300
-#define FACE_WAIT_SLOW_SEC 500
+#define FACE_WAIT_FAST_SEC 20
+#define FACE_WAIT_SLOW_SEC 60
 
 #define FACE_WAIT_TIMEOUT_SEC 30
 #define INTERVAL_STEP_SEC 15
@@ -37,7 +36,7 @@
 #define UPLOAD_CALLBACK_TIMEOUT_MS 30000
 
 #define VLM_POLL_INTERVAL_MS 15000
-#define VLM_MAX_RETRIES 30
+#define VLM_MAX_RETRIES 8
 
 typedef struct {
   char tick_id[32];
@@ -57,7 +56,6 @@ typedef enum {
 static TaskHandle_t s_monitor_task_handle = NULL;
 static TaskHandle_t s_vlm_poll_task_handle = NULL;
 
-// VLM 任务使用 PSRAM 静态分配
 static StaticTask_t s_vlm_task_tcb;
 static StackType_t *s_vlm_task_stack = NULL;
 
@@ -112,7 +110,6 @@ static bool capture_and_enqueue(void) {
   int64_t timestamp = esp_timer_get_time() / 1000;
   snprintf(filepath, sizeof(filepath), "/littlefs/monitor_%lld.jpg", timestamp);
 
-  // JPEG 压缩
   jpeg_enc_config_t cfg = DEFAULT_JPEG_ENC_CONFIG();
   cfg.width = fb->width;
   cfg.height = fb->height;
@@ -358,7 +355,6 @@ void monitor_task_start(void) {
     }
   }
 
-  // VLM 轮询任务：使用 PSRAM（不涉及文件写入）
   if (s_vlm_poll_task_handle == NULL) {
     size_t stack_words = VLM_POLL_STACK_SIZE / sizeof(StackType_t);
     s_vlm_task_stack = (StackType_t *)heap_caps_malloc(
@@ -382,7 +378,6 @@ void monitor_task_start(void) {
     }
   }
 
-  // 监控任务：必须使用内部 RAM（因为会写 LittleFS）
   if (s_monitor_task_handle == NULL) {
     BaseType_t ret =
         xTaskCreate(monitor_task_func, "monitor", MONITOR_STACK_SIZE, NULL, 5,

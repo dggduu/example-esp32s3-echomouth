@@ -14,7 +14,7 @@
 #include <string.h>
 
 #define OTA_RINGBUF_SIZE 8192
-#define OTA_TASK_STACK_SIZE 4096 // 减小，使用内部 RAM
+#define OTA_TASK_STACK_SIZE 4096
 
 static const char *TAG = "OTA_BACKEND";
 
@@ -143,7 +143,6 @@ bool ota_backend_init(void) {
   }
   esp_ble_ota_recv_fw_data_callback(ota_recv_fw_cb);
 
-  // OTA 任务必须使用内部 RAM（会写入 Flash）
   if (s_ota_task == NULL) {
     BaseType_t ret = xTaskCreate(ota_task, "ota_task", OTA_TASK_STACK_SIZE,
                                  NULL, 5, &s_ota_task);

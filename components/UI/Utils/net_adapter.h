@@ -5,7 +5,6 @@
 #include <stddef.h>
 #include <stdint.h>
 
-
 typedef enum {
   NET_STATUS_DISCONNECTED,
   NET_STATUS_CONNECTING,
@@ -22,10 +21,10 @@ typedef struct {
   char device_id[32];
 } net_config_t;
 
-// 初始化网络适配器（启动接收/发送/重连任务）
+// 初始化网络适配器
 void net_adapter_init(const net_config_t *cfg);
 
-// 发送二进制数据（线程安全）
+// 发送二进制数据
 void net_ws_send(const uint8_t *data, size_t len);
 
 // 连接状态查询

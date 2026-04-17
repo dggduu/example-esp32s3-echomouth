@@ -74,7 +74,7 @@ static boot_mode_t detect_boot_mode(void) {
 
   ota_button_init();
 
-  for (int i = 0; i < 100; i++) {
+  for (int i = 0; i < 500; i++) {
     if (s_boot_mode == BOOT_MODE_OTA) {
       break;
     }
@@ -236,7 +236,7 @@ void global_socket_init(void) {
 }
 
 void gui_task_regsiter() {
-  const size_t gui_stack_size = 8192; // 栈大小（字节）
+  const size_t gui_stack_size = 10 * 1024; // 栈大小（字节）
   s_gui_task_stack = (StackType_t *)heap_caps_malloc(
       gui_stack_size, MALLOC_CAP_SPIRAM | MALLOC_CAP_8BIT);
   if (s_gui_task_stack) {
@@ -300,11 +300,11 @@ void app_main(void) {
     sntp_helper_time("ntp.aliyun.com", 5000);
 
     // debug point
-    if (IS_DEBUG_MODE) {
-      debug_init_nvs_value();
-      test_nvs_info();
-      TEST_MEM_INFO("TEST");
-    }
+    // if (IS_DEBUG_MODE) {
+    //   debug_init_nvs_value();
+    //   test_nvs_info();
+    //   TEST_MEM_INFO("TEST");
+    // }
 
     init_mdns("esp32-s3");
     vTaskDelay(pdMS_TO_TICKS(1000));
@@ -329,9 +329,9 @@ void app_main(void) {
 
     monitor_task_start();
 
-    if (IS_DEBUG_MODE) {
-      test_task_monitor();
-    }
+    // if (IS_DEBUG_MODE) {
+    //   test_task_monitor();
+    // }
 
     extern const gs_page_desc_t page_main;
     gs_nav_pop();

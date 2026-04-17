@@ -11,24 +11,27 @@
 #define TAG "prov_qr"
 #define PROV_QR_VERSION "v1"
 
-// 二维码显示请求结构体
 typedef struct {
   char *qr_data;
   char *hint_text;
 } qr_display_req_t;
 
-// 静态队列句柄
 QueueHandle_t s_qr_queue = NULL;
 static bool s_qr_page_active = false;
 
-// 页面私有上下文
+static void set_status_async(void *arg) {
+  gs_qr_status_t status = (gs_qr_status_t)(intptr_t)arg;
+  if (s_qr_page_active) {
+    gs_qrcode_comp_trigger(status);
+  }
+}
+
 typedef struct {
   char *qr_data;
   char *hint_text;
   lv_obj_t *qr_comp;
 } qr_page_ctx_t;
 
-// 状态变更回调
 static void on_qr_status_changed(lv_obj_t *root, lv_obj_t *label,
                                  gs_qr_status_t status) {
   switch (status) {
@@ -44,7 +47,6 @@ static void on_qr_status_changed(lv_obj_t *root, lv_obj_t *label,
   }
 }
 
-// 页面初始化回调
 static void *qr_page_init(void *args) {
   if (!args)
     return NULL;
@@ -65,7 +67,6 @@ static void *qr_page_init(void *args) {
   return ctx;
 }
 
-// 页面渲染回调
 static lv_obj_t *qr_page_render(lv_obj_t *parent, void *ctx) {
   qr_page_ctx_t *page_ctx = (qr_page_ctx_t *)ctx;
   if (!page_ctx)
@@ -83,7 +84,6 @@ static lv_obj_t *qr_page_render(lv_obj_t *parent, void *ctx) {
   return qr_comp;
 }
 
-// 页面销毁回调
 static void qr_page_deinit(void *ctx) {
   qr_page_ctx_t *page_ctx = (qr_page_ctx_t *)ctx;
   if (page_ctx) {
@@ -94,29 +94,26 @@ static void qr_page_deinit(void *ctx) {
   s_qr_page_active = false;
 }
 
-// 页面描述符
 static const gs_page_desc_t qr_page_desc = {
     .init_cb = qr_page_init,
     .render_cb = qr_page_render,
     .deinit_cb = qr_page_deinit,
 };
 
-// 在 LVGL 任务中处理队列消息
 static void process_qr_display(void) {
   qr_display_req_t req;
   if (s_qr_queue && xQueueReceive(s_qr_queue, &req, 0) == pdTRUE) {
-    // 在 LVGL 上下文中执行页面推送
+
     const char *args[2] = {req.qr_data, req.hint_text};
     if (gs_nav_push(&qr_page_desc, (void *)args) != 0) {
       ESP_LOGE(TAG, "Failed to push QR page");
     }
-    // 释放动态分配的内存
+
     free(req.qr_data);
     free(req.hint_text);
   }
 }
 
-// 应由 LVGL 任务调用一次
 void prov_qr_init(void) {
   if (s_qr_queue == NULL) {
     s_qr_queue = xQueueCreate(5, sizeof(qr_display_req_t));
@@ -124,14 +121,12 @@ void prov_qr_init(void) {
   }
 }
 
-// 供 LVGL 任务调用的处理函数
 void prov_qr_process(void) {
   if (s_qr_queue) {
     process_qr_display();
   }
 }
 
-// 显示二维码
 void wifi_prov_print_qr(const char *name, const char *username, const char *pop,
                         const char *transport) {
   if (!name || !transport) {
@@ -157,7 +152,6 @@ void wifi_prov_print_qr(const char *name, const char *username, const char *pop,
              PROV_QR_VERSION, name, transport);
   }
 
-  // 创建请求
   qr_display_req_t req = {
       .qr_data = strdup(payload),
       .hint_text = strdup("Scan this QR code to start provisioning")};
@@ -175,9 +169,6 @@ void wifi_prov_print_qr(const char *name, const char *username, const char *pop,
   }
 }
 
-// 更新二维码状态
 void prov_qr_set_status(gs_qr_status_t status) {
-  if (s_qr_page_active) {
-    gs_qrcode_comp_trigger(status);
-  }
+  lv_async_call(set_status_async, (void *)(intptr_t)status);
 }

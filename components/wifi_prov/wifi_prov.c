@@ -375,16 +375,16 @@ esp_err_t wifi_prov_init(void) {
   static bool initialized = false;
 
   if (!initialized) {
-    // 1. NVS 和网络接口初始化
+    // NVS 和网络接口初始化
     wifi_prov_nvs_init();
 
-    // 2. 事件循环
+    // 事件循环
     ESP_ERROR_CHECK(esp_event_loop_create_default());
 
-    // 3. 创建事件组
+    // 创建事件组
     wifi_event_group = xEventGroupCreate();
 
-    // 4. 注册事件处理器
+    // 注册事件处理器
     ESP_ERROR_CHECK(esp_event_handler_register(
         WIFI_PROV_EVENT, ESP_EVENT_ANY_ID, &event_handler, NULL));
     ESP_ERROR_CHECK(esp_event_handler_register(
@@ -395,14 +395,14 @@ esp_err_t wifi_prov_init(void) {
     ESP_ERROR_CHECK(esp_event_handler_register(IP_EVENT, IP_EVENT_STA_GOT_IP,
                                                &event_handler, NULL));
 
-    // 5. 创建 WiFi station 网络接口
+    // 创建 WiFi station 网络接口
     esp_netif_create_default_wifi_sta();
 
-    // 6. 初始化 WiFi 驱动
+    // 初始化 WiFi 驱动
     wifi_init_config_t cfg = WIFI_INIT_CONFIG_DEFAULT();
     ESP_ERROR_CHECK(esp_wifi_init(&cfg));
 
-    // 7. 初始化 provisioning manager
+    // 初始化 provisioning manager
     wifi_prov_mgr_config_t config = {
         .wifi_prov_conn_cfg =
             {

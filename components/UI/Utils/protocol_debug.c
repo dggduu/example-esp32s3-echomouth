@@ -89,7 +89,6 @@ void print_protocol_packet(const protocol_packet_t *pkt) {
     }
   }
 
-  // 打印 payload 原始十六进制（前 32 字节）
   size_t hex_len = pkt->payload_len;
   if (hex_len > 32)
     hex_len = 32;
@@ -117,7 +116,6 @@ void print_raw_packet(const uint8_t *data, size_t len, const char *prefix) {
     printf("RAW PACKET (%zu bytes): ", len);
   }
 
-  // 打印十六进制
   for (size_t i = 0; i < len; i++) {
     printf("%02X ", data[i]);
     if ((i + 1) % 16 == 0 && i + 1 < len) {
@@ -127,7 +125,6 @@ void print_raw_packet(const uint8_t *data, size_t len, const char *prefix) {
     }
   }
 
-  // 打印 ASCII 可读部分
   printf("\n  ASCII: ");
   for (size_t i = 0; i < len; i++) {
     uint8_t c = data[i];

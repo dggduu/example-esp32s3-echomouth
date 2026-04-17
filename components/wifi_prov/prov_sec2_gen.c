@@ -6,8 +6,8 @@
 #define TAG "SEC2_GEN"
 #define SEC2_USERNAME "wifiprov"
 #define SEC2_PASSWORD "abcd1234"
-#define SALT_LEN 16      // 固定为 16 字节
-#define VERIFIER_LEN 384 // 3072 位 = 384 字节
+#define SALT_LEN 16
+#define VERIFIER_LEN 384
 
 static char *g_salt = NULL;
 static char *g_verifier = NULL;
@@ -17,8 +17,6 @@ static esp_err_t generate_salt_verifier(void) {
   esp_err_t err;
   int verifier_len_out = 0;
 
-  // 内部使用
-  // ESP_NG_3072(?),这个不是要用2048算吗，但是 security2 里面也是用这个？？？
   err = esp_srp_gen_salt_verifier(SEC2_USERNAME, strlen(SEC2_USERNAME),
                                   SEC2_PASSWORD, strlen(SEC2_PASSWORD), &g_salt,
                                   SALT_LEN, &g_verifier, &verifier_len_out);
@@ -27,7 +25,6 @@ static esp_err_t generate_salt_verifier(void) {
     return err;
   }
 
-  // 检查长度是否符合预期
   if (verifier_len_out != VERIFIER_LEN) {
     ESP_LOGE(TAG, "Unexpected verifier length: %d (expected %d)",
              verifier_len_out, VERIFIER_LEN);
@@ -64,6 +61,6 @@ esp_err_t prov_sec2_get_verifier(const char **verifier,
     initialized = true;
   }
   *verifier = g_verifier;
-  *verifier_len = VERIFIER_LEN; // 384 字节
+  *verifier_len = VERIFIER_LEN;
   return ESP_OK;
 }

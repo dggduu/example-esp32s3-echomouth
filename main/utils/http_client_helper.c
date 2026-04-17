@@ -22,8 +22,6 @@ typedef struct {
 static char s_cached_ip[32] = {0};
 static SemaphoreHandle_t s_mutex = NULL;
 
-/* ======================= mDNS ======================= */
-
 bool resolve_server_ip(char *ip, size_t len) {
   esp_ip4_addr_t addr;
 
@@ -55,8 +53,6 @@ static bool get_server_ip(char *ip, size_t len) {
   return true;
 }
 
-/* ======================= HTTP EVENT ======================= */
-
 static esp_err_t http_event_handler(esp_http_client_event_t *evt) {
   http_resp_ctx_t *ctx = (http_resp_ctx_t *)evt->user_data;
 
@@ -81,8 +77,6 @@ static esp_err_t http_event_handler(esp_http_client_event_t *evt) {
 
   return ESP_OK;
 }
-
-/* ======================= CORE ======================= */
 
 static bool perform_request(esp_http_client_method_t method, const char *path,
                             const char *content_type, const void *body,
@@ -144,23 +138,20 @@ bool http_put_binary(const char *url, uint8_t *data, int len) {
     return false;
   }
 
-  esp_http_client_config_t config = {
-      .url = url, // 直接使用传入的绝对 URL，而不是重新拼接
-      .method = HTTP_METHOD_PUT,
-      .timeout_ms = 15000, //  15 秒超时
-      .buffer_size = 2048,
-      .buffer_size_tx = 2048};
+  esp_http_client_config_t config = {.url = url,
+                                     .method = HTTP_METHOD_PUT,
+                                     .timeout_ms = 15000, //  15 秒超时
+                                     .buffer_size = 2048,
+                                     .buffer_size_tx = 2048};
 
   esp_http_client_handle_t client = esp_http_client_init(&config);
   if (!client) {
     return false;
   }
 
-  // AWS S3 预签名 URL 上传通常严格校验 Content-Type，需与服务端签发时一致
   esp_http_client_set_header(client, "Host", "aobara-pc.local:9000");
   esp_http_client_set_header(client, "Content-Type", "image/jpeg");
 
-  
   esp_http_client_set_post_field(client, (const char *)data, len);
 
   esp_err_t err = esp_http_client_perform(client);
@@ -168,7 +159,6 @@ bool http_put_binary(const char *url, uint8_t *data, int len) {
 
   if (err == ESP_OK) {
     int status = esp_http_client_get_status_code(client);
-    // S3 PUT 成功通常返回 200 OK
     if (status >= 200 && status < 300) {
       success = true;
     } else {
@@ -181,8 +171,6 @@ bool http_put_binary(const char *url, uint8_t *data, int len) {
   esp_http_client_cleanup(client);
   return success;
 }
-
-/* ======================= API ======================= */
 
 bool http_helper_init(void) {
   if (!s_mutex)
@@ -199,6 +187,16 @@ bool http_get_json(const char *path, char *response, int max_len) {
 bool http_post_json(const char *path, const char *json) {
   return perform_request(HTTP_METHOD_POST, path, "application/json", json,
                          strlen(json), NULL, 0);
+}
+
+bool http_post_json_with_response(const char *path, const char *json,
+                                  char *response, int max_len) {
+  if (!path || !json || !response || max_len <= 0) {
+    ESP_LOGE(TAG, "http_post_json_with_response: invalid parameters");
+    return false;
+  }
+  return perform_request(HTTP_METHOD_POST, path, "application/json", json,
+                         strlen(json), response, max_len);
 }
 
 bool get_mdns_server_ip(char *ip_buf, size_t buf_len) {

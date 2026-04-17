@@ -9,8 +9,8 @@
 extern "C" {
 #endif
 
-esp_err_t cam_helper_acquire(void); // 启动 camera（带引用计数）
-void cam_helper_release(void);      // 释放 camera
+esp_err_t cam_helper_acquire(void);
+void cam_helper_release(void);
 
 bool cam_helper_is_running(void);
 

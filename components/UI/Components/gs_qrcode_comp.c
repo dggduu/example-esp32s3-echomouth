@@ -6,8 +6,8 @@ static struct {
   lv_obj_t *qr_obj;
   lv_obj_t *label;
   gs_qr_config_t cfg;
-  gs_qr_status_t current_status; // 记录状态
-  bool is_busy;                  // 递归保护锁
+  gs_qr_status_t current_status;
+  bool is_busy;
 } s_comp;
 
 lv_obj_t *gs_qrcode_comp_create(lv_obj_t *parent, const gs_qr_config_t *cfg) {
@@ -46,12 +46,12 @@ void gs_qrcode_comp_trigger(gs_qr_status_t status) {
   if (status == s_comp.current_status && status != GS_QR_WAITED)
     return;
 
-  s_comp.is_busy = true; // 上锁
+  s_comp.is_busy = true;
   s_comp.current_status = status;
 
   if (s_comp.cfg.on_status_changed) {
     s_comp.cfg.on_status_changed(s_comp.root, s_comp.label, status);
   }
 
-  s_comp.is_busy = false; // 解锁
+  s_comp.is_busy = false;
 }

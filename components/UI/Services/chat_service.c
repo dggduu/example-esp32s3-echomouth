@@ -11,13 +11,12 @@ static const char *TAG = "CHAT_SERVICE";
 
 static msg_t s_window[CHAT_WINDOW_SIZE];
 static int s_window_count = 0;
-static int s_window_head = 0; // 最新消息插入位置
+static int s_window_head = 0;
 static bool s_dirty = false;
 static SemaphoreHandle_t s_fifo_mutex = NULL;
 
 static chat_render_cb_t s_render_cb = NULL;
 
-// 全局模式（定义在 protocol.c 中，声明为 extern）
 extern device_mode_t g_current_mode;
 
 static chat_notify_cb_t s_notify_cb = NULL;
@@ -29,7 +28,7 @@ static chat_reasoning_cb_t s_reasoning_cb = NULL;
 void chat_service_register_reasoning_cb(chat_reasoning_cb_t cb) {
   s_reasoning_cb = cb;
 }
-/* ---------- 内部函数 ---------- */
+
 static void add_message_to_window(uint32_t msg_id, uint32_t timestamp,
                                   uint8_t sender, const char *text) {
   if (!text || strlen(text) == 0)
@@ -49,7 +48,6 @@ static void add_message_to_window(uint32_t msg_id, uint32_t timestamp,
   xSemaphoreGive(s_fifo_mutex);
   ESP_LOGI(TAG, "Window updated: %s", text);
 
-  // 触发 UI 刷新回调
   if (s_render_cb) {
     s_render_cb();
   }
@@ -64,7 +62,6 @@ static void handle_data_packet(protocol_packet_t *pkt) {
     return;
   }
 
-  // 提取文本内容（跳过 DATA 头 7 字节）
   size_t content_len = pkt->payload_len - 7;
   if (content_len == 0) {
     ESP_LOGW(TAG, "DATA with empty content, ignoring");
@@ -83,18 +80,16 @@ static void handle_data_packet(protocol_packet_t *pkt) {
   free(content);
 }
 
-/* ---------- 公共接口 ---------- */
 void chat_service_init(void) {
   s_fifo_mutex = xSemaphoreCreateMutex();
   memset(s_window, 0, sizeof(s_window));
   s_window_count = 0;
   s_window_head = 0;
   s_dirty = false;
-  // 初始模式已在 protocol.c 中设置为 DEVICE_MODE_HOME
 }
 
 void chat_service_loop(void) {
-  // 可保留一些周期性维护，例如心跳打印，但不再用于渲染
+
   static uint32_t last_print = 0;
   uint32_t now = xTaskGetTickCount() * portTICK_PERIOD_MS;
   if (now - last_print > 5000) {
@@ -106,32 +101,26 @@ void chat_service_handle_packet(protocol_packet_t *pkt) {
   device_mode_t mode = protocol_get_mode();
   switch (pkt->type) {
   case TYPE_DATA:
-    // 聊天模式下才处理 DATA（添加到窗口）
     if (mode == DEVICE_MODE_CHAT_LIVE || mode == DEVICE_MODE_CHAT_HISTORY) {
       handle_data_packet(pkt);
     } else {
-      // home 模式下的 DATA 通常不会收到，但若收到可忽略或显示 toast
+
       ESP_LOGW(TAG, "DATA ignored in home mode");
     }
     break;
   case TYPE_SYN:
   case TYPE_END:
-    // 这些控制包只在聊天模式下有意义，但 ACK 已回复，无需额外动作
     ESP_LOGI(TAG, "Control packet %d, epoch=%d", pkt->type, pkt->epoch);
     break;
   case TYPE_REASONING:
-    // reasoning 包，通过回调显示 toast（无论当前模式，服务器只在 home
-    // 模式发送）
     if (s_reasoning_cb) {
       s_reasoning_cb(pkt->reasoning_content);
     }
     break;
   case TYPE_NOTIFY:
-    // 新消息通知，通过回调显示 toast（无论模式）
     if (s_notify_cb) {
       s_notify_cb(pkt->notify_msg_id, pkt->notify_sender, pkt->notify_preview);
     }
-    // 若当前处于聊天模式，也可以额外触发窗口刷新（但服务器会主动推送数据，不需要）
     break;
   default:
     ESP_LOGD(TAG, "Unhandled packet type 0x%02X", pkt->type);

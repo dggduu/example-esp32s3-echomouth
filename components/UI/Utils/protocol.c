@@ -122,9 +122,7 @@ int encode_packet(uint8_t *out_buf, size_t out_size, uint8_t type,
     send_payload_len = 7 + payload_len;
   }
 
-  size_t total_len =
-      10 + send_payload_len +
-      1; // STX+type+stream+epoch+timestamp(4)+len(2) + payload + CRC
+  size_t total_len = 10 + send_payload_len + 1;
   if (out_size < total_len) {
     ESP_LOGE("PROTOCOL", "Buffer too small");
     return -1;
@@ -142,7 +140,7 @@ int encode_packet(uint8_t *out_buf, size_t out_size, uint8_t type,
   }
   out_buf[10 + send_payload_len] = crc8(out_buf, 10 + send_payload_len);
 
-  // 调试打印（可选）
+  // 调试打印
   ESP_LOG_BUFFER_HEX("TX_PACKET", out_buf, total_len);
   return (int)total_len;
 }

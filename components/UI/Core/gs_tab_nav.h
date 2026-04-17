@@ -14,7 +14,6 @@ extern "C" {
 //   void (*deinit_cb)(void *ctx);
 // } gs_page_desc_t;
 
-// 确保这里的函数名与 main.c 调用的一致
 void gs_tab_nav_init(lv_obj_t *parent);
 int gs_tab_nav_add_page(const gs_page_desc_t *page, void *args);
 void gs_tab_nav_set_index(uint32_t index, lv_anim_enable_t anim);

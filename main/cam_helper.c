@@ -6,14 +6,10 @@
 
 static const char *TAG = "CAM_HELPER";
 
-/* ========= 内部状态 ========= */
-
 static bool s_cam_running = false;
 static int s_ref_count = 0;
 
 static SemaphoreHandle_t s_cam_mutex = NULL;
-
-/* ========= 内部工具 ========= */
 
 static void cam_helper_lock(void) {
   if (s_cam_mutex == NULL) {
@@ -23,8 +19,6 @@ static void cam_helper_lock(void) {
 }
 
 static void cam_helper_unlock(void) { xSemaphoreGive(s_cam_mutex); }
-
-/* ========= 对外接口 ========= */
 
 esp_err_t cam_helper_acquire(void) {
   cam_helper_lock();

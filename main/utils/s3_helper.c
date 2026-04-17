@@ -7,19 +7,19 @@
 #include "http_client_helper.h"
 #include "img_queue.h"
 #include "nvs_helper.h"
+#include "time_test_helper.h"
 #include <freertos/task.h>
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
-
-#include "time_test_helper.h"
+#include <time.h>
 
 #define DEVICE_ID 1
 static const char *TAG = "S3_helper";
 
 #define MAX_RETRY_LIMIT 5
 #define RETRY_BACKOFF_MS 5000
-#define UPLOADER_STACK_SIZE 6144 // 栈大小（字节），减小以节省内存
+#define UPLOADER_STACK_SIZE 6144
 
 static TaskHandle_t s_uploader_task_handle = NULL;
 static StaticTask_t s_uploader_task_tcb;
@@ -37,6 +37,17 @@ static void rewrite_mdns_url(const char *original_url, char *out_url,
     ESP_LOGI(TAG, "已接收预签名URL，拼接后的URL:%s", out_url);
   } else {
     strlcpy(out_url, original_url, out_len);
+  }
+}
+
+static int64_t get_timestamp_ms(void) {
+  time_t now = time(NULL);
+  if (now > 1600000000) {
+    return (int64_t)now * 1000;
+  } else {
+    int64_t fallback = esp_timer_get_time() / 1000;
+    ESP_LOGW(TAG, "NTP not synced, using fallback timestamp: %lld", fallback);
+    return fallback;
   }
 }
 
@@ -63,7 +74,7 @@ static void uploader_task(void *arg) {
     nvs_helper_get_i32("storage", "device_id", &device_id);
     int32_t task_id = job.task_id;
 
-    // 步骤 A: 获取预签名 URL
+    // 获取预签名 URL
     char url[128];
     snprintf(url, sizeof(url), "/device/%ld/upload-url", device_id);
     char resp[1024];
@@ -93,7 +104,7 @@ static void uploader_task(void *arg) {
       strlcpy(final_upload_url, raw_upload_url, sizeof(final_upload_url));
     }
 
-    // 步骤 B: 读取并上传文件
+    // 读取并上传文件
     FILE *f = fopen(job.path, "rb");
     if (!f) {
       ESP_LOGE(TAG, "File missing: %s", job.path);
@@ -126,9 +137,9 @@ static void uploader_task(void *arg) {
       goto fail_retry;
     }
 
-    // 步骤 C: 调用服务器接口
+    // 调用服务器接口
     bool post_success = false;
-    char tick_id[32] = {0};
+    char tick_id[64] = {0};
 
     if (job.type == IMG_TYPE_MONITOR) {
       cJSON *post = cJSON_CreateObject();
@@ -136,14 +147,31 @@ static void uploader_task(void *arg) {
       if (task_id > 0)
         cJSON_AddNumberToObject(post, "taskId", task_id);
       cJSON_AddStringToObject(post, "imageKey", image_key);
-      int64_t now_ms = esp_timer_get_time() / 1000;
-      cJSON_AddNumberToObject(post, "timestamp", now_ms);
-      snprintf(tick_id, sizeof(tick_id), "%lld", now_ms);
+      // int64_t now_ms = get_reliable_timestamp_ms();
+      // cJSON_AddNumberToObject(post, "timestamp", now_ms);
 
       char *json_str = cJSON_PrintUnformatted(post);
-      post_success = http_post_json("/device/image", json_str);
-      cJSON_Delete(post);
+      char resp_body[512];
+      bool http_ok = http_post_json_with_response("/device/image", json_str,
+                                                  resp_body, sizeof(resp_body));
       free(json_str);
+      cJSON_Delete(post);
+
+      if (!http_ok)
+        goto fail_retry;
+
+      // 解析响应中的 tickId
+      cJSON *resp_root = cJSON_Parse(resp_body);
+      if (resp_root) {
+        cJSON *tick_obj = cJSON_GetObjectItem(resp_root, "tickId");
+        if (tick_obj && tick_obj->valuestring) {
+          strlcpy(tick_id, tick_obj->valuestring, sizeof(tick_id));
+          post_success = true;
+        }
+        cJSON_Delete(resp_root);
+      }
+      if (!post_success)
+        goto fail_retry;
     } else {
       cJSON *post = cJSON_CreateObject();
       cJSON_AddNumberToObject(post, "deviceId", device_id);

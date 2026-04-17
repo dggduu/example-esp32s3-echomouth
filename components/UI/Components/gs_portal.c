@@ -6,16 +6,13 @@
 #include "stdlib.h"
 #include "string.h"
 
-/* ========== 全局当前显示的 Toast/Alert 对象 ========== */
 static lv_obj_t *g_current_toast = NULL;
 static lv_obj_t *g_current_alert = NULL;
 static TimerHandle_t g_toast_timer = NULL;
 
-/* 配置副本，用于回调中访问 */
 static gs_toast_config_t *g_toast_cfg = NULL;
 static gs_alert_config_t *g_alert_cfg = NULL;
 
-/* ========== 异步任务参数结构 ========== */
 typedef struct {
   bool is_alert;
   union {
@@ -49,7 +46,7 @@ static lv_obj_t *_toast_view_create(lv_obj_t *parent, gs_toast_config_t *cfg) {
   lv_obj_set_style_border_width(card, 1, 0);
   lv_obj_set_style_border_color(card, lv_color_hex(0x444444), 0);
   lv_obj_set_style_text_color(card, lv_color_white(), 0);
-  lv_obj_set_style_pad_all(card, 12, 0); // 内边距 12px
+  lv_obj_set_style_pad_all(card, 12, 0);
 
   // 背景色
   lv_color_t bg_color;
@@ -66,39 +63,30 @@ static lv_obj_t *_toast_view_create(lv_obj_t *parent, gs_toast_config_t *cfg) {
   }
   lv_obj_set_style_bg_color(card, bg_color, 0);
 
-  // 创建 label，支持换行
   lv_obj_t *label = lv_label_create(card);
   lv_label_set_text(label, cfg->msg);
   lv_label_set_long_mode(label, LV_LABEL_LONG_WRAP);
   lv_obj_set_style_text_align(label, LV_TEXT_ALIGN_CENTER, 0);
 
-  // 计算最大宽度：屏幕宽度的 80%，且不超过 300px（可根据需要调整）
   lv_coord_t screen_w = lv_display_get_horizontal_resolution(NULL);
   lv_coord_t max_width = screen_w * 4 / 5;
   if (max_width > 300)
     max_width = 300;
 
-  // 先设置 label 宽度为最大宽度，触发换行计算
   lv_obj_set_width(label, max_width);
   lv_obj_update_layout(label);
-  lv_coord_t label_width =
-      lv_obj_get_width(label); // 实际需要的宽度（可能小于 max_width）
+  lv_coord_t label_width = lv_obj_get_width(label);
   lv_coord_t label_height = lv_obj_get_height(label);
 
-  // 调整卡片大小：宽度 = label宽度 + 左右内边距，高度 = label高度 + 上下内边距
   lv_coord_t pad_hor =
       lv_obj_get_style_pad_left(card, 0) + lv_obj_get_style_pad_right(card, 0);
   lv_coord_t pad_ver =
       lv_obj_get_style_pad_top(card, 0) + lv_obj_get_style_pad_bottom(card, 0);
   lv_obj_set_size(card, label_width + pad_hor, label_height + pad_ver);
 
-  // label 居中
   lv_obj_center(label);
-
-  // 卡片位于屏幕顶部中间，距离顶部 10px
   lv_obj_align(card, LV_ALIGN_TOP_MID, 0, 10);
 
-  // 点击回调
   if (cfg->click_cb) {
     lv_obj_add_flag(card, LV_OBJ_FLAG_CLICKABLE);
     lv_obj_add_event_cb(card, _toast_click_cb, LV_EVENT_CLICKED, cfg);
@@ -181,7 +169,7 @@ static void _alert_cancel_click(lv_event_t *e) {
   gs_portal_alert_dismiss();
 }
 
-/* ========== 定时器回调：自动关闭 Toast ========== */
+/* ========== 自动关闭 Toast ========== */
 static void toast_timer_cb(TimerHandle_t xTimer) { gs_portal_toast_dismiss(); }
 
 /* ========== 异步回调实现 ========== */

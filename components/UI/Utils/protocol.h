@@ -56,7 +56,7 @@ typedef struct {
   char reasoning_content[256];
 } protocol_packet_t;
 
-// 模式管理（线程安全）
+// 模式管理
 void protocol_set_mode(device_mode_t mode);
 device_mode_t protocol_get_mode(void);
 
