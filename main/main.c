@@ -25,6 +25,8 @@
 
 #include "context.h"
 
+#include "efuse_helper.h"
+
 #include "time_test_helper.h"
 
 #define OTA_ENRTY_BUTTON_GPIO GPIO_NUM_0
@@ -275,6 +277,7 @@ void app_main(void) {
 
   debug_print_task_watermarks();
   debug_start_heap_monitor(5000);
+
   // bsp_camera_init();
 
   // camera_fb_t *fb = esp_camera_fb_get();

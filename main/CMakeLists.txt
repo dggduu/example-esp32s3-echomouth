@@ -1,6 +1,6 @@
 option(ENABLE_UNIT_TESTS "Build unit tests" OFF)
 
-set(ENABLE_UNIT_TESTS on)
+set(ENABLE_UNIT_TESTS off)
 
 set(main_srcs "")
 
@@ -45,7 +45,6 @@ if(ENABLE_UNIT_TESTS)
     target_compile_definitions(${COMPONENT_LIB} PRIVATE UNIT_TEST_MODE=1)
 endif()
 
-# 非测试模式下执行加密和镜像创建
 if(NOT ENABLE_UNIT_TESTS)
     create_esp_enc_img(${CMAKE_BINARY_DIR}/${CMAKE_PROJECT_NAME}.bin
         ${project_dir}/assets/private.pem ${CMAKE_BINARY_DIR}/${CMAKE_PROJECT_NAME}_secure.bin app)

@@ -9,7 +9,9 @@
 #include <sys/stat.h>
 #include <unistd.h>
 
-// 引用 vfs_helper 的头文件
+#include "mbedtls/gcm.h"
+#include "mbedtls/hkdf.h"
+
 #include "esp_vfs_helper.h"
 
 static const char *TAG = "aes_crypto";
@@ -297,4 +299,85 @@ esp_err_t aes_decrypt_file(const char *in_path, const char *out_path,
   err = vfs_helper_write_file_from_ram(out_path, plain_buf, plain_len);
   free(plain_buf);
   return err;
+}
+
+esp_err_t aes_gcm_encrypt(const uint8_t *key, size_t key_bits,
+                          const uint8_t *iv, size_t iv_len, const uint8_t *aad,
+                          size_t aad_len, const uint8_t *plain,
+                          size_t plain_len, uint8_t *cipher, uint8_t *tag,
+                          size_t tag_len) {
+  if (!key || !iv || !plain || !cipher || !tag || iv_len == 0 || iv_len > 16)
+    return ESP_ERR_INVALID_ARG;
+  if (key_bits != 128 && key_bits != 192 && key_bits != 256)
+    return ESP_ERR_INVALID_ARG;
+  if (tag_len < 4 || tag_len > 16)
+    return ESP_ERR_INVALID_ARG; // GCM 标签推荐 12~16 字节
+
+  xSemaphoreTake(s_mutex, portMAX_DELAY);
+
+  mbedtls_gcm_context ctx;
+  mbedtls_gcm_init(&ctx);
+
+  int ret = mbedtls_gcm_setkey(&ctx, MBEDTLS_CIPHER_ID_AES, key, key_bits);
+  if (ret != 0) {
+    mbedtls_gcm_free(&ctx);
+    xSemaphoreGive(s_mutex);
+    return ESP_FAIL;
+  }
+
+  ret = mbedtls_gcm_crypt_and_tag(&ctx, MBEDTLS_GCM_ENCRYPT, plain_len, iv,
+                                  iv_len, aad, aad_len, plain, cipher, tag_len,
+                                  tag);
+  mbedtls_gcm_free(&ctx);
+  xSemaphoreGive(s_mutex);
+
+  return (ret == 0) ? ESP_OK : ESP_FAIL;
+}
+
+esp_err_t aes_gcm_decrypt(const uint8_t *key, size_t key_bits,
+                          const uint8_t *iv, size_t iv_len, const uint8_t *aad,
+                          size_t aad_len, const uint8_t *cipher,
+                          size_t cipher_len, const uint8_t *tag, size_t tag_len,
+                          uint8_t *plain) {
+  if (!key || !iv || !cipher || !tag || !plain || iv_len == 0 || iv_len > 16)
+    return ESP_ERR_INVALID_ARG;
+  if (key_bits != 128 && key_bits != 192 && key_bits != 256)
+    return ESP_ERR_INVALID_ARG;
+  if (tag_len < 4 || tag_len > 16)
+    return ESP_ERR_INVALID_ARG;
+
+  xSemaphoreTake(s_mutex, portMAX_DELAY);
+
+  mbedtls_gcm_context ctx;
+  mbedtls_gcm_init(&ctx);
+
+  int ret = mbedtls_gcm_setkey(&ctx, MBEDTLS_CIPHER_ID_AES, key, key_bits);
+  if (ret != 0) {
+    mbedtls_gcm_free(&ctx);
+    xSemaphoreGive(s_mutex);
+    return ESP_FAIL;
+  }
+
+  ret = mbedtls_gcm_auth_decrypt(&ctx, cipher_len, iv, iv_len, aad, aad_len,
+                                 tag, tag_len, cipher, plain);
+  mbedtls_gcm_free(&ctx);
+  xSemaphoreGive(s_mutex);
+
+  return (ret == 0) ? ESP_OK : ESP_FAIL; // ret != 0 代表认证失败
+}
+
+// --------------------- 会话密钥派生（HKDF） ---------------------
+
+esp_err_t derive_session_key(const uint8_t *root_key, size_t root_key_len,
+                             const uint8_t *salt, size_t salt_len,
+                             const uint8_t *info, size_t info_len,
+                             uint8_t *session_key) {
+  if (!root_key || !info || !session_key || root_key_len == 0)
+    return ESP_ERR_INVALID_ARG;
+
+  // 使用 HKDF‑SHA256 扩展出 128 位会话密钥
+  int ret =
+      mbedtls_hkdf(mbedtls_md_info_from_type(MBEDTLS_MD_SHA256), salt, salt_len,
+                   root_key, root_key_len, info, info_len, session_key, 16);
+  return (ret == 0) ? ESP_OK : ESP_FAIL;
 }

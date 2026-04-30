@@ -96,6 +96,64 @@ esp_err_t aes_encrypt_file(const char *in_path, const char *out_path,
 esp_err_t aes_decrypt_file(const char *in_path, const char *out_path,
                            const uint8_t *key, size_t key_bits);
 
+/**
+ * @brief AES‑GCM 加密
+ * @param key        128/192/256 位密钥
+ * @param key_bits   密钥位数
+ * @param iv        初始化向量（推荐 12 字节，也可 1~16 字节）
+ * @param iv_len    IV 长度（字节）
+ * @param aad       附加认证数据（可为 NULL）
+ * @param aad_len   AAD 长度
+ * @param plain     明文数据
+ * @param plain_len 明文长度
+ * @param cipher    输出密文缓冲区（至少 plain_len 字节）
+ * @param tag       输出认证标签（推荐 16 字节）
+ * @param tag_len   标签长度（如 16）
+ * @return ESP_OK 成功
+ */
+esp_err_t aes_gcm_encrypt(const uint8_t *key, size_t key_bits,
+                          const uint8_t *iv, size_t iv_len, const uint8_t *aad,
+                          size_t aad_len, const uint8_t *plain,
+                          size_t plain_len, uint8_t *cipher, uint8_t *tag,
+                          size_t tag_len);
+
+/**
+ * @brief AES‑GCM 解密
+ * @param key        密钥
+ * @param key_bits   密钥位数
+ * @param iv        初始化向量
+ * @param iv_len    IV 长度
+ * @param aad       附加认证数据
+ * @param aad_len   AAD 长度
+ * @param cipher    密文数据
+ * @param cipher_len 密文长度
+ * @param tag       认证标签
+ * @param tag_len   标签长度
+ * @param plain     输出明文缓冲区
+ * @return ESP_OK 成功（且认证通过），ESP_FAIL 认证失败
+ */
+esp_err_t aes_gcm_decrypt(const uint8_t *key, size_t key_bits,
+                          const uint8_t *iv, size_t iv_len, const uint8_t *aad,
+                          size_t aad_len, const uint8_t *cipher,
+                          size_t cipher_len, const uint8_t *tag, size_t tag_len,
+                          uint8_t *plain);
+
+/**
+ * @brief 由设备根密钥（eFuse UUID）派生会话密钥
+ * @param root_key      根密钥（128/256 位，如 UUID）
+ * @param root_key_len  根密钥长度（字节）
+ * @param salt          盐值（可为 NULL）
+ * @param salt_len      盐值长度
+ * @param info          上下文信息（如 "guardian-session"）
+ * @param info_len      info 长度
+ * @param session_key   输出 128 位会话密钥（16 字节）
+ * @return ESP_OK 成功
+ */
+esp_err_t derive_session_key(const uint8_t *root_key, size_t root_key_len,
+                             const uint8_t *salt, size_t salt_len,
+                             const uint8_t *info, size_t info_len,
+                             uint8_t *session_key);
+
 #ifdef __cplusplus
 }
 #endif
