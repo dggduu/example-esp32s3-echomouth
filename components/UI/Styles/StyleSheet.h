@@ -1,3 +1,5 @@
+// AI辅助生成：DeepSeek, 2026-04-18
+
 #ifndef DARK_HIGH_CONTRAST_COLORS_H
 #define DARK_HIGH_CONTRAST_COLORS_H
 

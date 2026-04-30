@@ -34,6 +34,23 @@ jpeg_encode_decode_once took 52532 us
 ## YUV422->RGB565(BE)
 ### 未使用加速
 test_yuv422_display_once took 18839 us
+
+
+
+I (1042) camera: Detected GC0308 camera
+I (1042) camera: Detected camera at address=0x21
+I (1292) cam_hal: PSRAM DMA mode disabled
+I (1292) s3 ll_cam: node_size: 3840, nodes_per_line: 1, lines_per_node: 6
+I (1292) s3 ll_cam: dma_half_buffer_min:  3840, dma_half_buffer:  7680, lines_per_half_buffer: 12, dma_buffer_size: 15360
+I (1302) cam_hal: buffer_size: 15360, half_buffer_size: 7680, node_buffer_size: 3840, node_cnt: 4, total_cnt: 20
+I (1312) cam_hal: Allocating 153600 Byte frame buffer in OnBoard RAM
+I (1312) cam_hal: cam config ok
+I (1312) gc0308: subsample win:640x480, ratio:0.500000
+=== YUV422 to RGB565 Performance Test (Real Camera Frame) ===
+Frame: 320x240, format: 1, buffer: 0x3fcbee70 (Internal)
+[PERF] yuv422_to_rgb565_scalar_q6: 19829 us | Mem Δ: -153604 B
+I (1542) main_task: Returned from app_main()
+
 ```c
 #define CLAMP(x) ((x) > 255 ? 255 : ((x) < 0 ? 0 : (x)))
 
@@ -79,6 +96,17 @@ uint8_t *yuv422_to_rgb565(const uint8_t *in_buf, int width, int height,
 ```
 ### 使用 SIMD 加速（目前使用的，实际使用时还进行了下采样，下面的函数没有进行下采样，为了统一标准）
 test_yuv422_display_once took 47491 us
+
+
+I (1302) s3 ll_cam: dma_half_buffer_min:  3840, dma_half_buffer:  7680, lines_per_half_buffer: 12, dma_buffer_size: 15360
+I (1312) cam_hal: buffer_size: 15360, half_buffer_size: 7680, node_buffer_size: 3840, node_cnt: 4, total_cnt: 20
+I (1322) cam_hal: Allocating 153600 Byte frame buffer in OnBoard RAM
+I (1322) cam_hal: cam config ok
+I (1322) gc0308: subsample win:640x480, ratio:0.500000
+=== YUV422 to RGB565 Performance Test (Real Camera Frame) ===
+Frame: 320x240, format: 1, buffer: 0x3fcbee70 (Internal)
+[PERF] yuv422_to_rgb565_simd: 11217 us | Mem Δ: -153604 B
+I (1532) main_task: Returned from app_main()
 ```c
 #include "vector.h"
 #include <math.h>
@@ -122,7 +150,6 @@ uint8_t *yuv422_to_rgb565_simd(const uint8_t *in_buf, int width, int height,
       v_data[i] = v_data[i + 1] = (int32_t)in_buf[in_idx + 3] - 128;
     }
 
-    // SIMD 运算
     vec_add_scalar(&vec_y, -16, &vec_y);
     vec_mul_scalar(&vec_y, 1164, &vec_y, 0);
 
@@ -571,3 +598,213 @@ I (2510) dl::Model: +-----------------------------------------------------------
 I (2520) dl::Model: | /Reshape_5                                                | Reshape          | 2us      |
 I (2530) dl::Model: +-----------------------------------------------------------+------------------+----------+
 ```
+
+```c
+#include "esp_heap_caps.h"
+#include "esp_log.h"
+#include "simd_functions.h"
+#include "vector.h"
+#include <stdint.h>
+#include <stdlib.h>
+#include <string.h>
+
+#include "vector.h"
+#include <math.h>
+
+#include <sys/param.h>
+
+#include "esp_heap_caps.h"
+#include "esp_log.h"
+#include "simd_functions.h"
+#include <stdint.h>
+#include <stdlib.h>
+#include <string.h>
+
+#include "vector.h"
+#include <math.h>
+
+#include "vector.h"
+#include <sys/param.h>
+
+#define CHUNK_PAIRS 32
+#define CHUNK_SIZE (CHUNK_PAIRS * 2)
+
+typedef struct {
+  uint8_t y0, u, y1, v;
+} yuyv_pixel_t;
+
+uint8_t *yuv422_to_rgb565_simd(const uint8_t *in_buf, int width, int height,
+                               size_t *out_size) {
+  *out_size = width * height * 2;
+  uint16_t *out_buf = heap_caps_aligned_alloc(
+      16, *out_size, MALLOC_CAP_SPIRAM | MALLOC_CAP_8BIT);
+  if (!out_buf)
+    return NULL;
+
+  int total_pixels = width * height;
+
+  // 向量栈（一次性初始化）
+  VECTOR_STACK_INIT(vec_y, CHUNK_SIZE, DTYPE_INT16);
+  VECTOR_STACK_INIT(vec_u, CHUNK_SIZE, DTYPE_INT16);
+  VECTOR_STACK_INIT(vec_v, CHUNK_SIZE, DTYPE_INT16);
+  VECTOR_STACK_INIT(vec_r, CHUNK_SIZE, DTYPE_INT16);
+  VECTOR_STACK_INIT(vec_g, CHUNK_SIZE, DTYPE_INT16);
+  VECTOR_STACK_INIT(vec_b, CHUNK_SIZE, DTYPE_INT16);
+  VECTOR_STACK_INIT(vec_tmp, CHUNK_SIZE, DTYPE_INT16);
+  VECTOR_STACK_INIT(vec_rgb, CHUNK_SIZE, DTYPE_INT16);
+
+  VECTOR_STACK_INIT(vec_zero, CHUNK_SIZE, DTYPE_INT16);
+  VECTOR_STACK_INIT(vec_255, CHUNK_SIZE, DTYPE_INT16);
+  VECTOR_STACK_INIT(mask_r, CHUNK_SIZE, DTYPE_INT16);
+  VECTOR_STACK_INIT(mask_g, CHUNK_SIZE, DTYPE_INT16);
+  vec_fill(&vec_zero, 0);
+  vec_fill(&vec_255, 255);
+  vec_fill(&mask_r, 0xF8);
+  vec_fill(&mask_g, 0xFC);
+
+  int16_t *y_data = (int16_t *)vec_y.data;
+  int16_t *u_data = (int16_t *)vec_u.data;
+  int16_t *v_data = (int16_t *)vec_v.data;
+
+  static const int COEFF_Y = 74, COEFF_VR = 102, COEFF_UB = 129;
+  static const int COEFF_UG = -25, COEFF_VG = -52, ROUND = 32;
+
+  const yuyv_pixel_t *pixels = (const yuyv_pixel_t *)in_buf;
+
+  for (int p = 0; p < total_pixels; p += CHUNK_SIZE) {
+    int pair_start = p / 2;
+
+    // 解交织
+    for (int i = 0; i < CHUNK_PAIRS; i++) {
+      const yuyv_pixel_t *px = &pixels[pair_start + i];
+      int idx = i * 2;
+      y_data[idx] = px->y0;
+      y_data[idx + 1] = px->y1;
+      int16_t u = px->u - 128;
+      int16_t v = px->v - 128;
+      u_data[idx] = u_data[idx + 1] = u;
+      v_data[idx] = v_data[idx + 1] = v;
+    }
+
+    // 颜色转换
+    vec_add_scalar(&vec_y, -16, &vec_y);
+    vec_mul_scalar(&vec_y, COEFF_Y, &vec_y, 0);
+
+    vec_mul_scalar(&vec_v, COEFF_VR, &vec_r, 0);
+    vec_add(&vec_y, &vec_r, &vec_r);
+
+    vec_mul_scalar(&vec_u, COEFF_UB, &vec_b, 0);
+    vec_add(&vec_y, &vec_b, &vec_b);
+
+    vec_mul_scalar(&vec_u, COEFF_UG, &vec_g, 0);
+    vec_mul_scalar(&vec_v, COEFF_VG, &vec_tmp, 0);
+    vec_add(&vec_g, &vec_tmp, &vec_g);
+    vec_add(&vec_y, &vec_g, &vec_g);
+
+    vec_add_scalar(&vec_r, ROUND, &vec_r);
+    vec_add_scalar(&vec_g, ROUND, &vec_g);
+    vec_add_scalar(&vec_b, ROUND, &vec_b);
+
+    vec_mul_scalar(&vec_r, 1, &vec_r, 6);
+    vec_mul_scalar(&vec_g, 1, &vec_g, 6);
+    vec_mul_scalar(&vec_b, 1, &vec_b, 6);
+
+    vec_max(&vec_r, &vec_zero, &vec_r);
+    vec_min(&vec_r, &vec_255, &vec_r);
+    vec_max(&vec_g, &vec_zero, &vec_g);
+    vec_min(&vec_g, &vec_255, &vec_g);
+    vec_max(&vec_b, &vec_zero, &vec_b);
+    vec_min(&vec_b, &vec_255, &vec_b);
+
+    // toRTB565
+    vec_and(&vec_r, &mask_r, &vec_tmp);
+    vec_mul_scalar(&vec_tmp, 256, &vec_r, 0);
+    vec_and(&vec_g, &mask_g, &vec_tmp);
+    vec_mul_scalar(&vec_tmp, 8, &vec_g, 0);
+    vec_mul_scalar(&vec_b, 1, &vec_b, 3);
+
+    vec_or(&vec_r, &vec_g, &vec_rgb);
+    vec_or(&vec_rgb, &vec_b, &vec_rgb);
+
+    memcpy(&out_buf[p], vec_rgb.data, CHUNK_SIZE * sizeof(uint16_t));
+  }
+
+  return (uint8_t *)out_buf;
+}
+
+/**
+ * @brief 测试函数：捕获一帧 YUV422，转换为 RGB565 并显示在 LVGL 上
+ */
+void test_yuv422_rgb565_once(void) {
+  camera_fb_t *fb = esp_camera_fb_get();
+  if (!fb) {
+    ESP_LOGE("TEST", "Camera capture failed");
+    return;
+  }
+
+  ESP_LOGI("TEST", "Frame: %dx%d, format=%d, len=%d", fb->width, fb->height,
+           fb->format, fb->len);
+
+  if (fb->format != PIXFORMAT_YUV422) {
+    ESP_LOGW("TEST", "Frame format is not YUV422, actual=%d", fb->format);
+    esp_camera_fb_return(fb);
+    return;
+  }
+  if (((uintptr_t)fb->buf & 0xF) != 0) {
+    ESP_LOGW("TEST", "Input buffer not 16-byte aligned! Address: %p", fb->buf);
+  }
+
+  size_t out_size = 0;
+  uint8_t *rgb565_buf =
+      yuv422_to_rgb565_simd(fb->buf, fb->width, fb->height, &out_size);
+  if (!rgb565_buf) {
+    ESP_LOGE("TEST", "YUV to RGB conversion failed");
+    esp_camera_fb_return(fb);
+    return;
+  }
+
+  ESP_LOGI("TEST", "Converted to RGB565, buffer size = %d bytes", out_size);
+
+  static lv_image_dsc_t img_dsc;
+  img_dsc.header.cf = LV_COLOR_FORMAT_RGB565;
+  img_dsc.header.w = fb->width;
+  img_dsc.header.h = fb->height;
+  img_dsc.data_size = out_size;
+  img_dsc.data = rgb565_buf;
+
+  // 5. 创建图像对象并显示
+  lv_obj_t *img_obj = lv_image_create(lv_scr_act());
+  lv_image_set_src(img_obj, &img_dsc);
+  lv_obj_center(img_obj);
+
+  ESP_LOGI("TEST", "Image displayed, RGB565 buffer at %p", rgb565_buf);
+
+  esp_camera_fb_return(fb);
+}
+
+static void camera_fb_test_performance(camera_fb_t *fb) {
+  if (fb == NULL) {
+    printf("Camera frame buffer is NULL\n");
+    return;
+  }
+
+  printf("=== YUV422 to RGB565 Performance Test (Real Camera Frame) ===\n");
+  printf("Frame: %dx%d, format: %d, buffer: %p (%s)\n", fb->width, fb->height,
+         fb->format, fb->buf,
+         (fb->buf && heap_caps_check_integrity_all(true)) ? "Internal"
+                                                          : "PSRAM");
+
+  // 预热一次
+  size_t out_size;
+  uint16_t *out_buf = (uint16_t *)yuv422_to_rgb565_simd(fb->buf, fb->width,
+                                                        fb->height, &out_size);
+  if (out_buf) {
+    free(out_buf);
+  }
+
+  // 正式测试
+  TEST_TIME(yuv422_to_rgb565_simd, fb->buf, fb->width, fb->height, &out_size);
+}
+```
+
+## 单元测试

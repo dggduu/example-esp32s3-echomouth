@@ -25,6 +25,8 @@
 
 #include "context.h"
 
+#include "time_test_helper.h"
+
 #define OTA_ENRTY_BUTTON_GPIO GPIO_NUM_0
 static button_handle_t btn;
 static bool s_ota_mode_active = false;
@@ -271,70 +273,76 @@ void app_main(void) {
   my_ui_theme_init();
   bsp_littlefs_mount();
 
-  lv_obj_t *container = lv_scr_act();
-  gs_nav_init(container);
+  // bsp_camera_init();
 
-  // xTaskCreate(gui_flsuh_task, "gui", 8 * 1024, NULL, 4, NULL);
-  gui_task_regsiter();
-  gs_nav_push(&page_splash, NULL);
-  boot_mode_t mode = detect_boot_mode();
+  // camera_fb_t *fb = esp_camera_fb_get();
+  // camera_fb_test_performance(fb);
+  // esp_camera_fb_return(fb);
 
-  if (mode == BOOT_MODE_OTA) {
-    ESP_LOGI(TAG, "Booting into OTA mode");
-    gs_nav_pop();
-    gs_nav_push(&page_ota, NULL);
-    return;
-  } else {
-    esp_bt_controller_mem_release(ESP_BT_MODE_CLASSIC_BT);
+  // lv_obj_t *container = lv_scr_act();
+  // gs_nav_init(container);
 
-    ESP_LOGI(TAG, "Booting into NORMAL mode");
-    // bsp_codec_init();
+  // // xTaskCreate(gui_flsuh_task, "gui", 8 * 1024, NULL, 4, NULL);
+  // gui_task_regsiter();
+  // gs_nav_push(&page_splash, NULL);
+  // boot_mode_t mode = detect_boot_mode();
 
-    wifi_prov_init();
+  // if (mode == BOOT_MODE_OTA) {
+  //   ESP_LOGI(TAG, "Booting into OTA mode");
+  //   gs_nav_pop();
+  //   gs_nav_push(&page_ota, NULL);
+  //   return;
+  // } else {
+  //   esp_bt_controller_mem_release(ESP_BT_MODE_CLASSIC_BT);
 
-    xEventGroupWaitBits(wifi_event_group, WIFI_CONNECTED_EVENT, true, true,
-                        portMAX_DELAY);
-    gs_toast_show("联网成功", GS_TOAST_SUCCESS);
-    sntp_helper_init();
-    sntp_helper_set_timezone("CST-8");
-    sntp_helper_time("ntp.aliyun.com", 5000);
+  //   ESP_LOGI(TAG, "Booting into NORMAL mode");
+  //   // bsp_codec_init();
 
-    // debug point
-    // if (IS_DEBUG_MODE) {
-    //   debug_init_nvs_value();
-    //   test_nvs_info();
-    //   TEST_MEM_INFO("TEST");
-    // }
+  //   wifi_prov_init();
 
-    init_mdns("esp32-s3");
-    vTaskDelay(pdMS_TO_TICKS(1000));
-    query_mdns_host("aobara-pc");
+  //   xEventGroupWaitBits(wifi_event_group, WIFI_CONNECTED_EVENT, true, true,
+  //                       portMAX_DELAY);
+  //   gs_toast_show("联网成功", GS_TOAST_SUCCESS);
+  //   sntp_helper_init();
+  //   sntp_helper_set_timezone("CST-8");
+  //   sntp_helper_time("ntp.aliyun.com", 5000);
 
-    bsp_camera_init();
-    face_detector_helper_init(320, 240);
+  //   // debug point
+  //   // if (IS_DEBUG_MODE) {
+  //   //   debug_init_nvs_value();
+  //   //   test_nvs_info();
+  //   //   TEST_MEM_INFO("TEST");
+  //   // }
 
-    if (face_detector_helper_trigger_detection(1000)) {
-      ESP_LOGI(TAG, "detected facesd");
-    } else {
-      ESP_LOGI(TAG, "undetected facesd");
-    }
-    // 启动s3服务
-    uploader_task_start();
+  //   init_mdns("esp32-s3");
+  //   vTaskDelay(pdMS_TO_TICKS(1000));
+  //   query_mdns_host("aobara-pc");
 
-    http_helper_init();
-    // 初始化全局socket 流
-    global_socket_init();
-    // 初始化图片上传调用互斥量
-    img_queue_init();
+  //   bsp_camera_init();
+  //   face_detector_helper_init(320, 240);
 
-    monitor_task_start();
+  //   if (face_detector_helper_trigger_detection(1000)) {
+  //     ESP_LOGI(TAG, "detected facesd");
+  //   } else {
+  //     ESP_LOGI(TAG, "undetected facesd");
+  //   }
+  //   // 启动s3服务
+  //   uploader_task_start();
 
-    // if (IS_DEBUG_MODE) {
-    //   test_task_monitor();
-    // }
+  //   http_helper_init();
+  //   // 初始化全局socket 流
+  //   global_socket_init();
+  //   // 初始化图片上传调用互斥量
+  //   img_queue_init();
 
-    extern const gs_page_desc_t page_main;
-    gs_nav_pop();
-    gs_nav_push(&page_main, NULL);
-  }
+  //   monitor_task_start();
+
+  //   // if (IS_DEBUG_MODE) {
+  //   //   test_task_monitor();
+  //   // }
+
+  //   extern const gs_page_desc_t page_main;
+  //   gs_nav_pop();
+  //   gs_nav_push(&page_main, NULL);
 }
+// }
