@@ -1,4 +1,4 @@
-menu "HTTP Client Configuration"
+menu "APP Configuration"
 
     choice HTTP_MODE
         prompt "HTTP communication mode"
@@ -17,7 +17,7 @@ menu "HTTP Client Configuration"
 
     config SERVER_HOSTNAME
         string "Server hostname (for mDNS)"
-        default "aobara-pc"
+        default "youth-test"
         depends on HTTP_MODE_MDNS
         help
             Hostname to resolve via mDNS (without .local).
@@ -37,7 +37,7 @@ menu "HTTP Client Configuration"
 
     config S3_PUT_URL_PREFIX
         string "S3 pre-signed URL prefix"
-        default "http://aobara-pc.local:9000"
+        default "http://youth-test.local:9000"
         help
             Base URL for S3-compatible PUT requests (used by http_put_binary).
 

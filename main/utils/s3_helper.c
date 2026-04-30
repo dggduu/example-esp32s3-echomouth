@@ -7,6 +7,7 @@
 #include "http_client_helper.h"
 #include "img_queue.h"
 #include "nvs_helper.h"
+#include "sdkconfig.h" // 读取 menuconfig 配置
 #include "time_test_helper.h"
 #include <freertos/task.h>
 #include <stdio.h>
@@ -25,20 +26,29 @@ static TaskHandle_t s_uploader_task_handle = NULL;
 static StaticTask_t s_uploader_task_tcb;
 static StackType_t *s_uploader_task_stack = NULL;
 
+#ifdef CONFIG_HTTP_MODE_MDNS
+/**
+ * @brief 将预签名 URL 中的 mDNS 主机名替换为实际 IP
+ * @param original_url 原始 URL（可能包含 aobara-pc.local）
+ * @param out_url 输出缓冲区
+ * @param out_len 缓冲区大小
+ * @param ip 实际 IP 地址（点分十进制）
+ */
 static void rewrite_mdns_url(const char *original_url, char *out_url,
                              size_t out_len, const char *ip) {
-  const char *mdns_host = "aobara-pc.local";
+  const char *mdns_host = CONFIG_SERVER_HOSTNAME ".local"; // 使用配置的主机名
   const char *pos = strstr(original_url, mdns_host);
 
   if (pos && ip && strlen(ip) > 0) {
     size_t prefix_len = pos - original_url;
     snprintf(out_url, out_len, "%.*s%s%s", (int)prefix_len, original_url, ip,
              pos + strlen(mdns_host));
-    ESP_LOGI(TAG, "已接收预签名URL，拼接后的URL:%s", out_url);
+    ESP_LOGI(TAG, "Rewritten pre-signed URL: %s", out_url);
   } else {
     strlcpy(out_url, original_url, out_len);
   }
 }
+#endif // CONFIG_HTTP_MODE_MDNS
 
 static int64_t get_timestamp_ms(void) {
   time_t now = time(NULL);
@@ -95,14 +105,21 @@ static void uploader_task(void *arg) {
     char *raw_upload_url = url_obj->valuestring;
     char *image_key = key_obj->valuestring;
 
-    char ip[32] = {0};
     char final_upload_url[1024];
-    if (resolve_server_ip(ip, sizeof(ip))) {
+
+#ifdef CONFIG_HTTP_MODE_MDNS
+    // mDNS 模式：将 URL 中的主机名替换为实际 IP
+    char ip[32] = {0};
+    if (get_mdns_server_ip(ip, sizeof(ip))) {
       rewrite_mdns_url(raw_upload_url, final_upload_url,
                        sizeof(final_upload_url), ip);
     } else {
       strlcpy(final_upload_url, raw_upload_url, sizeof(final_upload_url));
     }
+#else
+    // HTTPS 模式：直接使用原始 URL
+    strlcpy(final_upload_url, raw_upload_url, sizeof(final_upload_url));
+#endif
 
     // 读取并上传文件
     FILE *f = fopen(job.path, "rb");

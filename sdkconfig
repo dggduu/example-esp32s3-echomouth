@@ -594,6 +594,16 @@ CONFIG_PARTITION_TABLE_MD5=y
 # end of Partition Table
 
 #
+# APP Configuration
+#
+# CONFIG_HTTP_MODE_MDNS is not set
+CONFIG_HTTP_MODE_HTTPS=y
+CONFIG_SERVER_PORT=3000
+CONFIG_HTTPS_URL="https://example.com/api"
+CONFIG_S3_PUT_URL_PREFIX="http://aobara-pc.local:9000"
+# end of APP Configuration
+
+#
 # Compiler options
 #
 CONFIG_COMPILER_OPTIMIZATION_DEBUG=y

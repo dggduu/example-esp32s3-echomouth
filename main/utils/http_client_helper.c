@@ -106,7 +106,7 @@ static bool perform_request(esp_http_client_method_t method, const char *path,
   snprintf(url, sizeof(url), "http://%s:%d%s", ip, SERVER_PORT, path);
 #else
   // HTTPS mode: base URL is configured as full base
-  snprintf(url, sizeof(url), "%s%s", CONFIG_HTTPS_BASE_URL, path);
+  snprintf(url, sizeof(url), "%s%s", CONFIG_HTTPS_URL, path);
 #endif
 
   http_resp_ctx_t resp_ctx = {
