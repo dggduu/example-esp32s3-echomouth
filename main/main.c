@@ -273,6 +273,8 @@ void app_main(void) {
   my_ui_theme_init();
   bsp_littlefs_mount();
 
+  debug_print_task_watermarks();
+  debug_start_heap_monitor(5000);
   // bsp_camera_init();
 
   // camera_fb_t *fb = esp_camera_fb_get();

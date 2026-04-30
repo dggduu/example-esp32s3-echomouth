@@ -1,6 +1,6 @@
 option(ENABLE_UNIT_TESTS "Build unit tests" OFF)
 
-set(ENABLE_UNIT_TESTS on)
+set(ENABLE_UNIT_TESTS off)
 
 set(main_srcs "")
 
