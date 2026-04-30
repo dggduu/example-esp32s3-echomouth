@@ -182,6 +182,39 @@ void query_mdns_host(const char *host_name) {
   }
 }
 
+#include "aes_crypto_helper.h"
+
+esp_err_t generate_device_key(void) {
+  uint8_t uuid[16];
+  esp_err_t err =
+      efuse_helper_read_uuid(uuid); // 从虚拟/真实 eFuse 读取 128 位 UUID
+
+  if (err != ESP_OK) {
+    ESP_LOGE(TAG, "Failed to read UUID from eFuse");
+    return err;
+  }
+
+  ESP_LOG_BUFFER_HEX("UUID", uuid, 16);
+  uint8_t device_key[16];
+  // 使用 HKDF 派生，info 固定为 "guardian-dev-key-v1"
+  err = derive_session_key(uuid, 16, NULL, 0,
+                           (const uint8_t *)"guardian-dev-key-v1", 20,
+                           device_key);
+
+  ESP_LOG_BUFFER_HEX(" device_key", device_key, 16);
+  if (err != ESP_OK) {
+    ESP_LOGE(TAG, "Failed to derive device key");
+    return err;
+  }
+
+  // 存入 NVS，后续其他模块可随时读取
+  err = nvs_helper_set_device_key(device_key);
+  if (err == ESP_OK) {
+    ESP_LOGI(TAG, "Device key derived and stored to NVS");
+  }
+  return err;
+}
+
 #include "esp_bt.h"
 #include "http_client_helper.h"
 #include "monitor_mamager.h"
@@ -199,7 +232,7 @@ void query_mdns_host(const char *host_name) {
 #include "protocol.h"
 
 void debug_init_nvs_value() {
-  nvs_helper_set_i32("storage", "device_id", 3);
+  nvs_helper_set_i32("storage", "device_id", 5);
   nvs_helper_set_i32("storage", "parent_id", 1);
 }
 
@@ -268,6 +301,18 @@ void gui_task_regsiter() {
   TEST_MEM_INFO(TAG);
 }
 
+void efuse_init() {
+#ifdef CONFIG_EFUSE_VIRTUAL
+  const uint8_t test_uuid[16] = {0x11, 0x22, 0x33, 0x44, 0x55, 0x66,
+                                 0x77, 0x88, 0x99, 0xAA, 0xBB, 0xCC,
+                                 0xDD, 0xEE, 0xFF, 0x00};
+  esp_err_t ret = efuse_helper_write_test_uuid(test_uuid);
+#endif
+  generate_device_key();
+}
+
+#include "nvs_helper.h"
+
 void app_main(void) {
   bsp_i2c_init();
   pca9557_init();
@@ -275,79 +320,76 @@ void app_main(void) {
   my_ui_theme_init();
   bsp_littlefs_mount();
 
+  nvs_helper_init();
+  efuse_init();
+
   debug_print_task_watermarks();
-  debug_start_heap_monitor(5000);
+  debug_start_heap_monitor(30000);
 
-  // bsp_camera_init();
+  lv_obj_t *container = lv_scr_act();
+  gs_nav_init(container);
 
-  // camera_fb_t *fb = esp_camera_fb_get();
-  // camera_fb_test_performance(fb);
-  // esp_camera_fb_return(fb);
+  xTaskCreate(gui_flsuh_task, "gui", 8 * 1024, NULL, 4, NULL);
+  gui_task_regsiter();
+  gs_nav_push(&page_splash, NULL);
+  boot_mode_t mode = detect_boot_mode();
 
-  // lv_obj_t *container = lv_scr_act();
-  // gs_nav_init(container);
+  if (mode == BOOT_MODE_OTA) {
+    ESP_LOGI(TAG, "Booting into OTA mode");
+    gs_nav_pop();
+    gs_nav_push(&page_ota, NULL);
+    return;
+  } else {
+    esp_bt_controller_mem_release(ESP_BT_MODE_CLASSIC_BT);
 
-  // // xTaskCreate(gui_flsuh_task, "gui", 8 * 1024, NULL, 4, NULL);
-  // gui_task_regsiter();
-  // gs_nav_push(&page_splash, NULL);
-  // boot_mode_t mode = detect_boot_mode();
+    ESP_LOGI(TAG, "Booting into NORMAL mode");
+    // bsp_codec_init();
 
-  // if (mode == BOOT_MODE_OTA) {
-  //   ESP_LOGI(TAG, "Booting into OTA mode");
-  //   gs_nav_pop();
-  //   gs_nav_push(&page_ota, NULL);
-  //   return;
-  // } else {
-  //   esp_bt_controller_mem_release(ESP_BT_MODE_CLASSIC_BT);
+    wifi_prov_init();
 
-  //   ESP_LOGI(TAG, "Booting into NORMAL mode");
-  //   // bsp_codec_init();
+    xEventGroupWaitBits(wifi_event_group, WIFI_CONNECTED_EVENT, true, true,
+                        portMAX_DELAY);
+    gs_toast_show("联网成功", GS_TOAST_SUCCESS);
+    sntp_helper_init();
+    sntp_helper_set_timezone("CST-8");
+    sntp_helper_time("ntp.aliyun.com", 5000);
 
-  //   wifi_prov_init();
+    // debug point
+    if (IS_DEBUG_MODE) {
+      debug_init_nvs_value();
+      test_nvs_info();
+      TEST_MEM_INFO("TEST");
+    }
 
-  //   xEventGroupWaitBits(wifi_event_group, WIFI_CONNECTED_EVENT, true, true,
-  //                       portMAX_DELAY);
-  //   gs_toast_show("联网成功", GS_TOAST_SUCCESS);
-  //   sntp_helper_init();
-  //   sntp_helper_set_timezone("CST-8");
-  //   sntp_helper_time("ntp.aliyun.com", 5000);
+    init_mdns("esp32-s3");
+    vTaskDelay(pdMS_TO_TICKS(1000));
+    query_mdns_host("aobara-pc");
 
-  //   // debug point
-  //   // if (IS_DEBUG_MODE) {
-  //   //   debug_init_nvs_value();
-  //   //   test_nvs_info();
-  //   //   TEST_MEM_INFO("TEST");
-  //   // }
+    bsp_camera_init();
+    face_detector_helper_init(320, 240);
 
-  //   init_mdns("esp32-s3");
-  //   vTaskDelay(pdMS_TO_TICKS(1000));
-  //   query_mdns_host("aobara-pc");
+    if (face_detector_helper_trigger_detection(1000)) {
+      ESP_LOGI(TAG, "detected facesd");
+    } else {
+      ESP_LOGI(TAG, "undetected facesd");
+    }
+    // 启动s3服务
+    uploader_task_start();
 
-  //   bsp_camera_init();
-  //   face_detector_helper_init(320, 240);
+    http_helper_init();
+    // 初始化全局socket 流
+    global_socket_init();
+    // 初始化图片上传调用互斥量
+    img_queue_init();
 
-  //   if (face_detector_helper_trigger_detection(1000)) {
-  //     ESP_LOGI(TAG, "detected facesd");
-  //   } else {
-  //     ESP_LOGI(TAG, "undetected facesd");
-  //   }
-  //   // 启动s3服务
-  //   uploader_task_start();
+    monitor_task_start();
 
-  //   http_helper_init();
-  //   // 初始化全局socket 流
-  //   global_socket_init();
-  //   // 初始化图片上传调用互斥量
-  //   img_queue_init();
+    // if (IS_DEBUG_MODE) {
+    //   test_task_monitor();
+    // }
 
-  //   monitor_task_start();
-
-  //   // if (IS_DEBUG_MODE) {
-  //   //   test_task_monitor();
-  //   // }
-
-  //   extern const gs_page_desc_t page_main;
-  //   gs_nav_pop();
-  //   gs_nav_push(&page_main, NULL);
+    extern const gs_page_desc_t page_main;
+    gs_nav_pop();
+    gs_nav_push(&page_main, NULL);
+  }
 }
-// }

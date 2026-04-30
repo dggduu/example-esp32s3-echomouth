@@ -2,6 +2,7 @@
 #include "esp_log.h"
 #include "nvs.h"
 #include "nvs_flash.h"
+#include <string.h>
 
 static const char *TAG = "NVS_HELPER";
 
@@ -126,4 +127,39 @@ int32_t nvs_helper_get_pid() {
     return -1;
   }
   return output;
+}
+
+esp_err_t nvs_helper_set_device_key(const uint8_t *key) {
+  if (!key)
+    return ESP_ERR_INVALID_ARG;
+
+  nvs_handle_t handle;
+  esp_err_t err = nvs_open("guardian", NVS_READWRITE, &handle);
+  if (err != ESP_OK)
+    return err;
+
+  err = nvs_set_blob(handle, "dev_key", key, 16);
+  if (err == ESP_OK) {
+    err = nvs_commit(handle);
+  }
+  nvs_close(handle);
+  return err;
+}
+
+esp_err_t nvs_helper_get_device_key(uint8_t *key_out) {
+  if (!key_out)
+    return ESP_ERR_INVALID_ARG;
+
+  nvs_handle_t handle;
+  esp_err_t err = nvs_open("guardian", NVS_READONLY, &handle);
+  if (err != ESP_OK)
+    return err;
+
+  size_t required_size = 16;
+  err = nvs_get_blob(handle, "dev_key", key_out, &required_size);
+  if (err == ESP_OK && required_size != 16) {
+    err = ESP_ERR_INVALID_SIZE; // 数据损坏
+  }
+  nvs_close(handle);
+  return err;
 }

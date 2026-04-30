@@ -25,6 +25,10 @@ const char *packet_type_to_str(uint8_t type) {
     return "END";
   case TYPE_NOTIFY:
     return "NOTIFY";
+  case TYPE_SESSION_RANDOM:
+    return "SESSION_RANDOM";
+  case TYPE_SESSION_READY:
+    return "SESSION_READY";
   default:
     return "UNKNOWN";
   }
@@ -58,6 +62,7 @@ void print_protocol_packet(const protocol_packet_t *pkt) {
   printf("  timestamp  : %lu\n", (unsigned long)pkt->timestamp);
   printf("  payload_len: %u\n", pkt->payload_len);
 
+  // 根据类型打印特定字段
   if (pkt->type == TYPE_DATA) {
     printf("  [DATA] msg_id     : %lu\n", (unsigned long)pkt->msg_id);
     printf("  [DATA] total_parts: %u\n", pkt->total_parts);
@@ -79,7 +84,19 @@ void print_protocol_packet(const protocol_packet_t *pkt) {
     printf("  [NOTIFY] preview  : %s\n", pkt->notify_preview);
   } else if (pkt->type == TYPE_REASONING) {
     printf("  [REASONING] content: %s\n", pkt->reasoning_content);
+  } else if (pkt->type == TYPE_SESSION_RANDOM) {
+    // 32 字节随机数，直接打十六进制
+    printf("  [SESSION_RANDOM] (%u bytes):\n", pkt->payload_len);
+    if (pkt->payload && pkt->payload_len > 0) {
+      for (size_t i = 0; i < pkt->payload_len; i++) {
+        printf("%02X ", pkt->payload[i]);
+      }
+      printf("\n");
+    }
+  } else if (pkt->type == TYPE_SESSION_READY) {
+    printf("  [SESSION_READY] (empty payload)\n");
   } else {
+    // 通用 payload 处理
     if (pkt->payload_len > 0 && pkt->payload) {
       printf("  payload text : ");
       fwrite(pkt->payload, 1, pkt->payload_len, stdout);
@@ -89,10 +106,11 @@ void print_protocol_packet(const protocol_packet_t *pkt) {
     }
   }
 
+  // 打印原始十六进制（不超过 32 字节）
   size_t hex_len = pkt->payload_len;
   if (hex_len > 32)
     hex_len = 32;
-  if (hex_len > 0) {
+  if (hex_len > 0 && pkt->payload) {
     printf("  payload hex  : ");
     for (size_t i = 0; i < hex_len; i++) {
       printf("%02X ", pkt->payload[i]);

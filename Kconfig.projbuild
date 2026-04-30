@@ -1,0 +1,44 @@
+menu "HTTP Client Configuration"
+
+    choice HTTP_MODE
+        prompt "HTTP communication mode"
+        default HTTP_MODE_MDNS
+        help
+            Select how the HTTP client locates the server.
+        config HTTP_MODE_MDNS
+            bool "mDNS mode"
+            help
+                Use mDNS to resolve server hostname (e.g. aobara-pc.local).
+        config HTTP_MODE_HTTPS
+            bool "HTTPS mode"
+            help
+                Use predefined HTTPS URL (requires certificate).
+    endchoice
+
+    config SERVER_HOSTNAME
+        string "Server hostname (for mDNS)"
+        default "aobara-pc"
+        depends on HTTP_MODE_MDNS
+        help
+            Hostname to resolve via mDNS (without .local).
+
+    config SERVER_PORT
+        int "Server port"
+        default 3000
+        help
+            Port number of the server.
+
+    config HTTPS_URL
+        string "HTTPS server URL"
+        default "https://example.com/api"
+        depends on HTTP_MODE_HTTPS
+        help
+            Full HTTPS URL when using HTTPS mode.
+
+    config S3_PUT_URL_PREFIX
+        string "S3 pre-signed URL prefix"
+        default "http://aobara-pc.local:9000"
+        help
+            Base URL for S3-compatible PUT requests (used by http_put_binary).
+
+endmenu

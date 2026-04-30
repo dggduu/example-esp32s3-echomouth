@@ -14,5 +14,5 @@ idf_component_register(
         log
         json
         lvgl
-        esp_websocket_client
+        esp_websocket_client main
 )

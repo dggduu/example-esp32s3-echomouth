@@ -184,6 +184,31 @@ static void net_rx_task(void *pvParameters) {
               ESP_LOGI(TAG, "packet received type:%d", pkt.type);
               print_protocol_packet(&pkt);
 
+              if (pkt.type == TYPE_SESSION_RANDOM) {
+                uint16_t payload_len;
+                memcpy(&payload_len, &packet_buf[8], 2);
+                if (payload_len == 32) {
+                  uint8_t session_key[16];
+                  if (protocol_derive_session_key(packet_buf + 10, 32,
+                                                  session_key)) {
+                    protocol_activate_crypto(session_key);
+                    uint8_t buf[32];
+                    int len = encode_packet(buf, sizeof(buf),
+                                            TYPE_SESSION_READY, NULL, 0,
+                                            STREAM_CONTROL, 0, 0, 0, 0, 0, 0);
+                    if (len > 0)
+                      net_ws_send(buf, len);
+                    ESP_LOGI(TAG, "Encryption session established");
+                  }
+                }
+                rx_idx = 0;
+                continue;
+              }
+              if (pkt.type == TYPE_SESSION_READY) {
+                rx_idx = 0;
+                continue;
+              }
+
               // 非 ACK 包立即回复 ACK
               if (pkt.type != TYPE_ACK) {
                 uint8_t ack_buf[32];
