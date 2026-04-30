@@ -34,26 +34,28 @@ typedef struct {
   size_t len;
   size_t *out_len;
   esp_err_t result;
-  SemaphoreHandle_t sync;
+  TaskHandle_t caller;
 } vfs_msg_t;
 
 static QueueHandle_t s_vfs_queue = NULL;
 static bool s_initialized = false;
 static bool s_fs_mounted = false;
-static portMUX_TYPE s_lock = portMUX_INITIALIZER_UNLOCKED;
+static SemaphoreHandle_t s_init_mutex = NULL;
 
 #define DONE_MSG(msg, ret)                                                     \
   do {                                                                         \
     (msg)->result = (ret);                                                     \
-    if ((msg)->sync)                                                           \
-      xSemaphoreGive((msg)->sync);                                             \
-    return;                                                                    \
+    if ((msg)->caller) {                                                       \
+      xTaskNotifyGive((msg)->caller);                                          \
+    }                                                                          \
   } while (0)
 
+/* 内部函数                                                */
 static void do_read_file(vfs_msg_t *msg) {
   struct stat st;
   if (stat(msg->path, &st) != 0)
     DONE_MSG(msg, ESP_ERR_NOT_FOUND);
+
   if (st.st_size > VFS_MAX_READ_SIZE)
     DONE_MSG(msg, ESP_ERR_INVALID_SIZE);
 
@@ -79,6 +81,7 @@ static void do_read_file(vfs_msg_t *msg) {
   msg->buf = buf;
   if (msg->out_len)
     *msg->out_len = read_bytes;
+
   DONE_MSG(msg, ESP_OK);
 }
 
@@ -87,7 +90,14 @@ static void do_copy_file(vfs_msg_t *msg) {
   if (!src)
     DONE_MSG(msg, ESP_ERR_NOT_FOUND);
 
-  FILE *dst = fopen(msg->dst_path, "wb");
+  char tmp_path[CONFIG_LITTLEFS_OBJ_NAME_LEN + 10];
+  int ret = snprintf(tmp_path, sizeof(tmp_path), "%s.tmp", msg->dst_path);
+  if (ret < 0 || ret >= sizeof(tmp_path)) {
+    fclose(src);
+    DONE_MSG(msg, ESP_ERR_INVALID_ARG);
+  }
+
+  FILE *dst = fopen(tmp_path, "wb");
   if (!dst) {
     fclose(src);
     DONE_MSG(msg, ESP_FAIL);
@@ -97,14 +107,15 @@ static void do_copy_file(vfs_msg_t *msg) {
   if (!tmp) {
     fclose(src);
     fclose(dst);
+    unlink(tmp_path);
     DONE_MSG(msg, ESP_ERR_NO_MEM);
   }
 
   size_t n;
-  esp_err_t res = ESP_OK;
+  bool write_ok = true;
   while ((n = fread(tmp, 1, VFS_COPY_BUF_SIZE, src)) > 0) {
     if (fwrite(tmp, 1, n, dst) != n) {
-      res = ESP_FAIL;
+      write_ok = false;
       break;
     }
   }
@@ -112,18 +123,37 @@ static void do_copy_file(vfs_msg_t *msg) {
   heap_caps_free(tmp);
   fclose(src);
   fclose(dst);
-  DONE_MSG(msg, res);
+
+  if (!write_ok) {
+    unlink(tmp_path);
+    DONE_MSG(msg, ESP_FAIL);
+  }
+
+  if (rename(tmp_path, msg->dst_path) != 0) {
+    unlink(tmp_path);
+    DONE_MSG(msg, ESP_FAIL);
+  }
+
+  DONE_MSG(msg, ESP_OK);
 }
 
+/* VFS 任务主循环                                          */
 static void vfs_task(void *arg) {
   vfs_msg_t *msg;
-  ESP_LOGI(TAG, "VFS task started"); // 修改点：使用 TAG 消除未使用警告
-  while (1) {
+  bool running = true;
+
+  ESP_LOGI(TAG, "VFS task started (stack min free: %u)",
+           uxTaskGetStackHighWaterMark(NULL));
+
+  while (running) {
     if (xQueueReceive(s_vfs_queue, &msg, portMAX_DELAY) == pdTRUE) {
+
       switch (msg->type) {
+
       case VFS_MSG_READ_FILE:
         do_read_file(msg);
         break;
+
       case VFS_MSG_WRITE_FILE: {
         FILE *f = fopen(msg->path, "wb");
         size_t w = f ? fwrite(msg->buf, 1, msg->len, f) : 0;
@@ -131,61 +161,80 @@ static void vfs_task(void *arg) {
           fclose(f);
         DONE_MSG(msg, (w == msg->len) ? ESP_OK : ESP_FAIL);
       } break;
+
       case VFS_MSG_COPY_FILE:
         do_copy_file(msg);
         break;
+
       case VFS_MSG_DELETE_FILE:
         DONE_MSG(msg, (unlink(msg->path) == 0) ? ESP_OK : ESP_FAIL);
         break;
+
       case VFS_MSG_GET_SIZE: {
         struct stat st;
         int r = stat(msg->path, &st);
-        if (msg->out_len)
+        if (r == 0 && msg->out_len)
           *msg->out_len = st.st_size;
         DONE_MSG(msg, (r == 0) ? ESP_OK : ESP_ERR_NOT_FOUND);
       } break;
+
       case VFS_MSG_EXIT:
-        DONE_MSG(msg, ESP_OK);
-        vTaskDelete(NULL);
-        return;
+        msg->result = ESP_OK;
+        if (msg->caller) {
+          xTaskNotifyGive(msg->caller);
+        }
+        running = false;
+        break;
+
       default:
         DONE_MSG(msg, ESP_ERR_NOT_SUPPORTED);
         break;
       }
     }
   }
+
+  ESP_LOGI(TAG, "VFS task exiting");
+  vTaskDelete(NULL);
+
+  while (1) {
+    vTaskDelay(portMAX_DELAY); // 保险，永远不允许 return
+  }
 }
 
+/* 同步消息发送                                            */
 static esp_err_t send_sync_msg(vfs_msg_t *msg) {
-  portENTER_CRITICAL(&s_lock);
-  if (!s_initialized) {
-    portEXIT_CRITICAL(&s_lock);
+  if (!s_initialized)
     return ESP_ERR_INVALID_STATE;
-  }
-  portEXIT_CRITICAL(&s_lock);
 
-  msg->sync = xSemaphoreCreateBinary();
-  if (!msg->sync)
-    return ESP_ERR_NO_MEM;
+  msg->caller = xTaskGetCurrentTaskHandle();
 
   if (xQueueSend(s_vfs_queue, &msg, pdMS_TO_TICKS(1000)) != pdTRUE) {
-    vSemaphoreDelete(msg->sync);
+    msg->caller = NULL;
     return ESP_ERR_TIMEOUT;
   }
 
-  if (xSemaphoreTake(msg->sync, pdMS_TO_TICKS(10000)) != pdTRUE) {
-    vSemaphoreDelete(msg->sync);
+  if (ulTaskNotifyTake(pdTRUE, pdMS_TO_TICKS(10000)) == 0) {
     return ESP_ERR_TIMEOUT;
   }
 
-  vSemaphoreDelete(msg->sync);
   return msg->result;
 }
 
+/* 初始化                                                   */
+void vfs_helper_early_init(void) {
+  if (!s_init_mutex) {
+    s_init_mutex = xSemaphoreCreateMutex();
+  }
+}
+
 esp_err_t vfs_helper_init(const char *base_path) {
-  portENTER_CRITICAL(&s_lock);
+  if (!s_init_mutex)
+    return ESP_ERR_INVALID_STATE;
+
+  xSemaphoreTake(s_init_mutex, portMAX_DELAY);
+
   if (s_initialized) {
-    portEXIT_CRITICAL(&s_lock);
+    xSemaphoreGive(s_init_mutex);
     return ESP_OK;
   }
 
@@ -196,48 +245,62 @@ esp_err_t vfs_helper_init(const char *base_path) {
         .format_if_mount_failed = true,
     };
     if (esp_vfs_littlefs_register(&conf) != ESP_OK) {
-      portEXIT_CRITICAL(&s_lock);
-      ESP_LOGE(TAG, "Failed to mount LittleFS");
+      xSemaphoreGive(s_init_mutex);
       return ESP_FAIL;
     }
     s_fs_mounted = true;
   }
 
   s_vfs_queue = xQueueCreate(10, sizeof(vfs_msg_t *));
-  if (!s_vfs_queue ||
-      xTaskCreate(vfs_task, "vfs_task", 4096, NULL, 5, NULL) != pdPASS) {
-    if (s_vfs_queue)
-      vQueueDelete(s_vfs_queue);
-    portEXIT_CRITICAL(&s_lock);
+  if (!s_vfs_queue) {
+    xSemaphoreGive(s_init_mutex);
+    return ESP_ERR_NO_MEM;
+  }
+
+  if (xTaskCreate(vfs_task, "vfs_task", 8192, NULL, 5, NULL) != pdPASS) {
+    vQueueDelete(s_vfs_queue);
+    s_vfs_queue = NULL;
+    xSemaphoreGive(s_init_mutex);
     return ESP_ERR_NO_MEM;
   }
 
   s_initialized = true;
-  portEXIT_CRITICAL(&s_lock);
+  xSemaphoreGive(s_init_mutex);
   return ESP_OK;
 }
 
 esp_err_t vfs_helper_deinit(void) {
   vfs_msg_t msg = {.type = VFS_MSG_EXIT};
   esp_err_t ret = send_sync_msg(&msg);
+
   if (ret == ESP_OK) {
-    portENTER_CRITICAL(&s_lock);
+    vTaskDelay(pdMS_TO_TICKS(50));
+    xSemaphoreTake(s_init_mutex, portMAX_DELAY);
     vQueueDelete(s_vfs_queue);
     s_vfs_queue = NULL;
     s_initialized = false;
-    portEXIT_CRITICAL(&s_lock);
+    xSemaphoreGive(s_init_mutex);
   }
+
   return ret;
 }
 
+/* 公开 API                                                 */
 esp_err_t vfs_helper_read_file_to_ram(const char *path, uint8_t **out_buf,
                                       size_t *out_len) {
   if (!path || !out_buf || !out_len)
     return ESP_ERR_INVALID_ARG;
-  vfs_msg_t msg = {.type = VFS_MSG_READ_FILE, .path = path, .out_len = out_len};
+
+  vfs_msg_t msg = {
+      .type = VFS_MSG_READ_FILE,
+      .path = path,
+      .out_len = out_len,
+  };
+
   esp_err_t err = send_sync_msg(&msg);
   if (err == ESP_OK)
     *out_buf = msg.buf;
+
   return err;
 }
 
@@ -245,30 +308,51 @@ esp_err_t vfs_helper_write_file_from_ram(const char *path, const uint8_t *buf,
                                          size_t len) {
   if (!path || !buf || len == 0)
     return ESP_ERR_INVALID_ARG;
-  vfs_msg_t msg = {.type = VFS_MSG_WRITE_FILE,
-                   .path = path,
-                   .buf = (uint8_t *)buf,
-                   .len = len};
+
+  vfs_msg_t msg = {
+      .type = VFS_MSG_WRITE_FILE,
+      .path = path,
+      .buf = (uint8_t *)buf,
+      .len = len,
+  };
+
   return send_sync_msg(&msg);
 }
 
 esp_err_t vfs_helper_delete_file(const char *path) {
   if (!path)
     return ESP_ERR_INVALID_ARG;
-  vfs_msg_t msg = {.type = VFS_MSG_DELETE_FILE, .path = path};
+
+  vfs_msg_t msg = {
+      .type = VFS_MSG_DELETE_FILE,
+      .path = path,
+  };
+
   return send_sync_msg(&msg);
 }
 
 esp_err_t vfs_helper_copy_file(const char *src, const char *dst) {
   if (!src || !dst)
     return ESP_ERR_INVALID_ARG;
-  vfs_msg_t msg = {.type = VFS_MSG_COPY_FILE, .src_path = src, .dst_path = dst};
+
+  vfs_msg_t msg = {
+      .type = VFS_MSG_COPY_FILE,
+      .src_path = src,
+      .dst_path = dst,
+  };
+
   return send_sync_msg(&msg);
 }
 
 esp_err_t vfs_helper_get_file_size(const char *path, size_t *size) {
   if (!path || !size)
     return ESP_ERR_INVALID_ARG;
-  vfs_msg_t msg = {.type = VFS_MSG_GET_SIZE, .path = path, .out_len = size};
+
+  vfs_msg_t msg = {
+      .type = VFS_MSG_GET_SIZE,
+      .path = path,
+      .out_len = size,
+  };
+
   return send_sync_msg(&msg);
 }

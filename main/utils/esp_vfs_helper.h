@@ -9,8 +9,9 @@
 extern "C" {
 #endif
 
+void vfs_helper_early_init(void);
 esp_err_t vfs_helper_init(const char *base_path);
-esp_err_t vfs_helper_deinit(void);
+// esp_err_t vfs_helper_deinit(void);
 esp_err_t vfs_helper_read_file_to_ram(const char *path, uint8_t **out_buf,
                                       size_t *out_len);
 esp_err_t vfs_helper_write_file_from_ram(const char *path, const uint8_t *buf,

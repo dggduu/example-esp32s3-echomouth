@@ -1,6 +1,6 @@
 option(ENABLE_UNIT_TESTS "Build unit tests" OFF)
 
-set(ENABLE_UNIT_TESTS off)
+set(ENABLE_UNIT_TESTS on)
 
 set(main_srcs "")
 
@@ -31,11 +31,13 @@ list(APPEND main_srcs
     "utils/img_queue.c"
     "utils/time_test_helper.c"
     "utils/esp_vfs_helper.c"
+    "utils/efuse_helper.c"
+    "../esp_efuse_table_custom.c"
 )
 
 idf_component_register(
     SRCS ${main_srcs}
-    INCLUDE_DIRS "." "utils" "Pages"
+    INCLUDE_DIRS "." "utils" "Pages" "../include"
 )
 
 if(ENABLE_UNIT_TESTS)
