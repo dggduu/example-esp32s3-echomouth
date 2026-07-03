@@ -1,5 +1,5 @@
 #include "protocol.h"
-#include "aes_crypto_helper.h" // 提供 aes_gcm_encrypt/decrypt, derive_session_key
+#include "aes_crypto_helper.h" 
 #include "esp_log.h"
 #include "esp_random.h"
 #include "freertos/FreeRTOS.h"
@@ -10,18 +10,18 @@
 
 static const char *TAG = "PROTOCOL";
 
-/* ---------- 全局状态 ---------- */
+
 device_mode_t g_current_mode = DEVICE_MODE_HOME;
 static portMUX_TYPE g_mode_spinlock = portMUX_INITIALIZER_UNLOCKED;
 
-/* 加密状态 */
+
 static bool g_crypto_active = false;
 static uint8_t g_session_key[16] = {0};
 
-/* 用于解密载荷的静态缓冲区，一次只处理一帧（单线程安全） */
+
 static uint8_t g_dec_buf[512];
 
-/* ---------- 模式管理 ---------- */
+
 void protocol_set_mode(device_mode_t mode) {
   portENTER_CRITICAL(&g_mode_spinlock);
   g_current_mode = mode;
@@ -37,7 +37,7 @@ device_mode_t protocol_get_mode(void) {
   return mode;
 }
 
-/* ---------- CRC ---------- */
+
 uint8_t crc8(const uint8_t *data, size_t len) {
   uint8_t crc = 0x00;
   for (size_t i = 0; i < len; i++) {
@@ -53,7 +53,7 @@ uint8_t crc8(const uint8_t *data, size_t len) {
   return crc;
 }
 
-/* ---------- 底层：明文帧构造 ---------- */
+
 static int build_plain_packet(uint8_t *buf, size_t buf_size, uint8_t type,
                               uint8_t stream, const uint8_t *payload,
                               uint16_t payload_len) {
@@ -74,11 +74,11 @@ static int build_plain_packet(uint8_t *buf, size_t buf_size, uint8_t type,
   return total;
 }
 
-/* ---------- 底层：加密帧构造 ---------- */
+
 static int build_encrypted_packet(uint8_t *buf, size_t buf_size, uint8_t type,
                                   uint8_t stream, const uint8_t *plain,
                                   size_t plain_len) {
-  // 帧结构: 10字节头 + 12字节IV + 密文 + 16字节标签 + 1字节CRC
+  
   const size_t required = 10 + 12 + plain_len + 16 + 1;
   if (buf_size < required)
     return -1;
@@ -86,18 +86,18 @@ static int build_encrypted_packet(uint8_t *buf, size_t buf_size, uint8_t type,
   uint8_t iv[12];
   esp_fill_random(iv, sizeof(iv));
   uint8_t tag[16];
-  uint8_t cipher[sizeof(g_dec_buf)]; // 与解密缓冲区一致大小
+  uint8_t cipher[sizeof(g_dec_buf)]; 
 
   if (plain_len > sizeof(cipher))
     return -1;
 
-  // 构建 AAD：前10字节（STX, type, stream, epoch, timestamp, payload_len）
+  
   uint8_t aad[10];
   aad[0] = STX;
   aad[1] = type;
   aad[2] = stream;
-  aad[3] = 0;            // epoch
-  memset(&aad[4], 0, 4); // timestamp
+  aad[3] = 0;            
+  memset(&aad[4], 0, 4); 
   uint16_t len16 = (uint16_t)plain_len;
   memcpy(&aad[8], &len16, 2);
 
@@ -109,27 +109,27 @@ static int build_encrypted_packet(uint8_t *buf, size_t buf_size, uint8_t type,
     return -1;
   }
 
-  // 组装加密帧
-  memcpy(buf, aad, 10);                  // 帧头
-  memcpy(buf + 10, iv, 12);              // IV
-  memcpy(buf + 22, cipher, plain_len);   // 密文
-  memcpy(buf + 22 + plain_len, tag, 16); // 标签
+  
+  memcpy(buf, aad, 10);                  
+  memcpy(buf + 10, iv, 12);              
+  memcpy(buf + 22, cipher, plain_len);   
+  memcpy(buf + 22 + plain_len, tag, 16); 
   buf[required - 1] = crc8(buf, required - 1);
   return required;
 }
 
-/* ---------- 公开的 encode_packet ---------- */
+
 int encode_packet(uint8_t *out_buf, size_t out_size, uint8_t type,
                   const uint8_t *payload, size_t payload_len, uint8_t stream,
                   uint8_t epoch, uint32_t timestamp, uint32_t msg_id,
                   uint8_t part_idx, uint8_t total_parts, uint8_t sender) {
 
-  // 构建业务负载（对于 TYPE_DATA 需要内部 7 字节头）
+  
   uint8_t send_buf[sizeof(g_dec_buf)];
   size_t send_len = payload_len;
 
   if (type == TYPE_DATA) {
-    // 构造 DATA 头部（小端序）
+    
     send_buf[0] = msg_id & 0xFF;
     send_buf[1] = (msg_id >> 8) & 0xFF;
     send_buf[2] = (msg_id >> 16) & 0xFF;
@@ -144,7 +144,7 @@ int encode_packet(uint8_t *out_buf, size_t out_size, uint8_t type,
     memcpy(send_buf, payload, payload_len);
   }
 
-  // 决定是否加密（协商帧总是明文）
+  
   if (g_crypto_active && type != TYPE_SESSION_RANDOM &&
       type != TYPE_SESSION_READY) {
     return build_encrypted_packet(out_buf, out_size, type, stream, send_buf,
@@ -155,7 +155,7 @@ int encode_packet(uint8_t *out_buf, size_t out_size, uint8_t type,
   }
 }
 
-/* ---------- 便捷函数 ---------- */
+
 int encode_ack(uint8_t *out_buf, size_t out_size, uint8_t acked_type,
                uint8_t acked_epoch) {
   uint8_t payload[2] = {acked_type, acked_epoch};
@@ -179,23 +179,23 @@ int encode_history_req(uint8_t *out_buf, size_t out_size, uint32_t last_msg_id,
 
 int encode_data_packet(uint8_t *buf, const char *text) {
   return encode_packet(buf, 512, TYPE_DATA, (const uint8_t *)text, strlen(text),
-                       STREAM_CHAT, 0, 0, 1, 0, 1, 1); // sender=1 (child)
+                       STREAM_CHAT, 0, 0, 1, 0, 1, 1); 
 }
 
-/* ---------- 解密与解析 ---------- */
+
 bool decode_packet(const uint8_t *raw, size_t len, protocol_packet_t *out) {
   if (!raw || !out || len < 11)
     return false;
   if (raw[0] != STX)
     return false;
 
-  // CRC 校验
+  
   if (crc8(raw, len - 1) != raw[len - 1]) {
     ESP_LOGW(TAG, "CRC mismatch");
     return false;
   }
 
-  // 提取帧头
+  
   out->type = raw[1];
   out->stream = raw[2];
   out->epoch = raw[3];
@@ -204,10 +204,10 @@ bool decode_packet(const uint8_t *raw, size_t len, protocol_packet_t *out) {
   const uint8_t *src_payload = NULL;
   uint16_t src_payload_len = 0;
 
-  // 分支：加密帧 or 明文帧
+  
   if (g_crypto_active && out->type != TYPE_SESSION_RANDOM &&
       out->type != TYPE_SESSION_READY) {
-    // ------ 加密帧解密 ------
+    
     if (len < 10 + 12 + 16 + 1)
       return false;
     uint16_t plain_len;
@@ -233,18 +233,18 @@ bool decode_packet(const uint8_t *raw, size_t len, protocol_packet_t *out) {
     src_payload = g_dec_buf;
     src_payload_len = plain_len;
   } else {
-    // ------ 明文帧 ------ */
+    
     memcpy(&src_payload_len, &raw[8], 2);
     if (len < 10 + src_payload_len + 1)
       return false;
     src_payload = raw + 10;
   }
 
-  // 填充通用字段
+  
   out->payload_len = src_payload_len;
-  out->payload = src_payload; // 指向内部静态缓冲区或原始帧数据
+  out->payload = src_payload; 
 
-  // 根据类型提取业务字段
+  
   if (out->type == TYPE_DATA) {
     if (src_payload_len < 7)
       return false;
@@ -275,7 +275,7 @@ bool decode_packet(const uint8_t *raw, size_t len, protocol_packet_t *out) {
   return true;
 }
 
-/* ---------- 加密会话管理 ---------- */
+
 bool protocol_is_crypto_active(void) { return g_crypto_active; }
 
 void protocol_activate_crypto(const uint8_t *session_key) {
@@ -305,3 +305,4 @@ bool protocol_derive_session_key(const uint8_t *server_random,
                                      session_key_out);
   return (ret == ESP_OK);
 }
+

@@ -10,19 +10,19 @@ extern "C" {
 #endif
 
 /**
- * @brief 注册使用AES加密模块（增加引用计数）
+ * @brief 注册使用AES加密模块
  * @return ESP_OK 成功，ESP_ERR_NO_MEM 等错误码
  */
 esp_err_t aes_crypto_register(void);
 
 /**
- * @brief 注销使用AES加密模块（减少引用计数，计数为0时释放硬件资源）
+ * @brief 注销使用AES加密模块
  * @return ESP_OK 成功
  */
 esp_err_t aes_crypto_unregister(void);
 
 /**
- * @brief AES-CBC加密缓冲区（CBC模式，要求输入长度是16的倍数）
+ * @brief AES-CBC加密缓冲区
  * @param key     密钥缓冲区
  * @param key_bits 密钥位数（128/192/256）
  * @param iv      初始化向量（16字节），会被修改（输出密文后IV更新为下一块IV）
@@ -74,7 +74,7 @@ esp_err_t aes_ecb_decrypt_block(const uint8_t *key, size_t key_bits,
                                 const uint8_t *input, uint8_t *output);
 
 /**
- * @brief 加密文件（将输入文件加密后写入输出文件，使用CBC模式+PKCS#7填充）
+ * @brief 加密文件
  * @param in_path  源文件路径
  * @param out_path 目标文件路径
  * @param key      密钥
@@ -100,7 +100,7 @@ esp_err_t aes_decrypt_file(const char *in_path, const char *out_path,
  * @brief AES‑GCM 加密
  * @param key        128/192/256 位密钥
  * @param key_bits   密钥位数
- * @param iv        初始化向量（推荐 12 字节，也可 1~16 字节）
+ * @param iv        初始化向量（1~16 字节）
  * @param iv_len    IV 长度（字节）
  * @param aad       附加认证数据（可为 NULL）
  * @param aad_len   AAD 长度
@@ -144,7 +144,7 @@ esp_err_t aes_gcm_decrypt(const uint8_t *key, size_t key_bits,
  * @param root_key_len  根密钥长度（字节）
  * @param salt          盐值（可为 NULL）
  * @param salt_len      盐值长度
- * @param info          上下文信息（如 "guardian-session"）
+ * @param info          上下文信息
  * @param info_len      info 长度
  * @param session_key   输出 128 位会话密钥（16 字节）
  * @return ESP_OK 成功
@@ -158,4 +158,4 @@ esp_err_t derive_session_key(const uint8_t *root_key, size_t root_key_len,
 }
 #endif
 
-#endif /* AES_CRYPTO_HELPER_H */
+#endif

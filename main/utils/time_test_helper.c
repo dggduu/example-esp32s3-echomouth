@@ -35,9 +35,7 @@ void test_task_monitor() {
  * 打印所有任务堆栈高水位
  **/
 void debug_print_task_watermarks(void) {
-  // 获取系统当前的任务总数
   UBaseType_t num_tasks = uxTaskGetNumberOfTasks();
-  // 动态分配数组用于保存每个任务的状态快照
   TaskStatus_t *task_array = malloc(num_tasks * sizeof(TaskStatus_t));
   if (task_array == NULL) {
     ESP_LOGE("DEBUG", "Failed to alloc memory for task status array");
@@ -47,19 +45,14 @@ void debug_print_task_watermarks(void) {
   uint32_t total_runtime;
   num_tasks = uxTaskGetSystemState(task_array, num_tasks, &total_runtime);
 
-  printf(LOG_CLR_CYAN
-         "========== Task Stack Watermarks ==========\n" LOG_CLR_RESET);
-  printf("%-20s %8s %12s\n", "Task Name", "Priority", "HighWaterMark(B)");
-  printf("--------------------------------------------\n");
+  // 输出 VOFA 格式
+  printf("# Task Watermarks (CSV): Name,Priority,HighWaterMark_Bytes\n");
 
   for (UBaseType_t i = 0; i < num_tasks; i++) {
-    // 高水位线：从创建以来堆栈剩余空间的最小值
     uint32_t high_water = uxTaskGetStackHighWaterMark(task_array[i].xHandle);
-    printf("%-20s %8u %12lu\n", task_array[i].pcTaskName,
+    printf("WATERMARK,%s,%u,%lu\n", task_array[i].pcTaskName,
            (unsigned)task_array[i].uxBasePriority, high_water);
   }
-  printf("============================================\n");
-
   free(task_array);
 }
 
@@ -78,14 +71,12 @@ static void heap_monitor_task(void *arg) {
   while (1) {
     int64_t now = esp_timer_get_time();
     size_t free_heap = heap_caps_get_free_size(MALLOC_CAP_DEFAULT);
-    printf("HEAP,%lld,%zu\n", now, free_heap);
+    printf("HEAP_MON {\"t_us\":%lld,\"free\":%zu}\n", now, free_heap);
     vTaskDelay(delay_ticks);
   }
 }
 
-/* ---------- 创建函数（改为静态 + PSRAM） ---------- */
 void debug_start_heap_monitor(uint32_t interval_ms) {
-  // 1. 在 PSRAM 中分配任务栈（4096 字节）
   s_heap_monitor_stack =
       heap_caps_malloc(4096, MALLOC_CAP_SPIRAM | MALLOC_CAP_8BIT);
   if (s_heap_monitor_stack == NULL) {
@@ -93,16 +84,11 @@ void debug_start_heap_monitor(uint32_t interval_ms) {
     return;
   }
 
-  // 2. 使用静态方式创建任务
-  TaskHandle_t handle =
-      xTaskCreateStatic(heap_monitor_task,              // 函数
-                        "heap_mon",                     // 名称
-                        4096 / sizeof(StackType_t),     // 栈深度（字数）
-                        (void *)(uintptr_t)interval_ms, // 参数
-                        configMAX_PRIORITIES - 2,       // 优先级
-                        s_heap_monitor_stack,           // PSRAM 栈
-                        &s_heap_monitor_tcb             // 静态 TCB
-      );
+  // 使用静态方式创建任务
+  TaskHandle_t handle = xTaskCreateStatic(
+      heap_monitor_task, "heap_mon", 4096 / sizeof(StackType_t),
+      (void *)(uintptr_t)interval_ms, configMAX_PRIORITIES - 2,
+      s_heap_monitor_stack, &s_heap_monitor_tcb);
 
   if (handle == NULL) {
     ESP_LOGE("DEBUG", "Failed to create heap monitor task (static)");

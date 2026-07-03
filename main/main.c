@@ -194,9 +194,9 @@ esp_err_t generate_device_key(void) {
     return err;
   }
 
-  ESP_LOG_BUFFER_HEX("UUID", uuid, 16);
+  //ESP_LOG_BUFFER_HEX("UUID", uuid, 16);
   uint8_t device_key[16];
-  // 使用 HKDF 派生，info 固定为 "guardian-dev-key-v1"
+  // 使用 HKDF 派生
   err = derive_session_key(uuid, 16, NULL, 0,
                            (const uint8_t *)"guardian-dev-key-v1", 20,
                            device_key);
@@ -207,7 +207,7 @@ esp_err_t generate_device_key(void) {
     return err;
   }
 
-  // 存入 NVS，后续其他模块可随时读取
+  // 存入 NVS
   err = nvs_helper_set_device_key(device_key);
   if (err == ESP_OK) {
     ESP_LOGI(TAG, "Device key derived and stored to NVS");
@@ -232,7 +232,7 @@ esp_err_t generate_device_key(void) {
 #include "protocol.h"
 
 void debug_init_nvs_value() {
-  nvs_helper_set_i32("storage", "device_id", 5);
+  nvs_helper_set_i32("storage", "device_id", 3);
   nvs_helper_set_i32("storage", "parent_id", 1);
 }
 
@@ -302,6 +302,7 @@ void gui_task_regsiter() {
 }
 
 void efuse_init() {
+  // 在生产模式中请自行删除宏定义部分（请注意实际的efuse为一次性硬件，修改前请确定你在做什么）
 #ifdef CONFIG_EFUSE_VIRTUAL
   const uint8_t test_uuid[16] = {0x11, 0x22, 0x33, 0x44, 0x55, 0x66,
                                  0x77, 0x88, 0x99, 0xAA, 0xBB, 0xCC,

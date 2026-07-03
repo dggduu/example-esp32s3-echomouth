@@ -26,18 +26,8 @@ int32_t nvs_helper_get_did();
 
 int32_t nvs_helper_get_pid();
 
-/**
- * @brief 存储派生设备密钥到 NVS
- * @param key 指向 16 字节密钥的指针
- * @return ESP_OK 成功，其他 NVS 错误码
- */
 esp_err_t nvs_helper_set_device_key(const uint8_t *key);
 
-/**
- * @brief 从 NVS 读取派生设备密钥
- * @param key_out 输出密钥的 16 字节缓冲区
- * @return ESP_OK 成功，其他 NVS 错误码
- */
 esp_err_t nvs_helper_get_device_key(uint8_t *key_out);
 
 #endif

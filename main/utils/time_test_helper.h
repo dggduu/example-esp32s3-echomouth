@@ -61,24 +61,8 @@ void test_nvs_info(void);
 
 void test_task_monitor();
 
-// ————— 任务堆栈高水位 —————
-/**
- * @brief 打印所有 FreeRTOS 任务的高水位线（剩余堆栈字节数）
- *        内部使用 uxTaskGetSystemState 确保准确性
- * @note  需在 menuconfig 中开启 FreeRTOS 的 trace 功能：
- *        Component config --> FreeRTOS --> Kernel --> Enable FreeRTOS trace
- * facility
- */
 void debug_print_task_watermarks(void);
 
-// ————— 堆内存曲线记录 —————
-/**
- * @brief 启动堆内存监控任务（长期运行）
- *        每隔 'interval_ms' 毫秒输出一行 CSV：
- *        "HEAP,<timestamp_us>,<free_heap_bytes>"
- * @param interval_ms 采样间隔（毫秒）
- * @note  可通过串口工具重定向到文件，再用脚本绘图
- */
 void debug_start_heap_monitor(uint32_t interval_ms);
 
 #endif

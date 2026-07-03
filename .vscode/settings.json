@@ -14,5 +14,6 @@
     "--background-index",
     "--query-driver=**",
     "--compile-commands-dir=f:\\szpi-s3-esp\\test\\build"
-  ]
+  ],
+  "idf.pythonInstallPath": "e:\\tools\\ESP\\v553tools\\tools\\idf-python\\3.11.2\\python.exe"
 }

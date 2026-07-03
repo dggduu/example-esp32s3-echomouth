@@ -596,10 +596,10 @@ CONFIG_PARTITION_TABLE_MD5=y
 #
 # APP Configuration
 #
-# CONFIG_HTTP_MODE_MDNS is not set
-CONFIG_HTTP_MODE_HTTPS=y
+CONFIG_HTTP_MODE_MDNS=y
+# CONFIG_HTTP_MODE_HTTPS is not set
+CONFIG_SERVER_HOSTNAME="aobata-pc.local"
 CONFIG_SERVER_PORT=3000
-CONFIG_HTTPS_URL="https://example.com/api"
 CONFIG_S3_PUT_URL_PREFIX="http://aobara-pc.local:9000"
 # end of APP Configuration
 

@@ -18,7 +18,6 @@ static const char *TAG = "aes_crypto";
 static SemaphoreHandle_t s_mutex = NULL;
 static int s_ref_count = 0;
 
-// 确保互斥锁已创建
 static esp_err_t ensure_mutex(void) {
   if (!s_mutex) {
     s_mutex = xSemaphoreCreateMutex();
@@ -57,7 +56,6 @@ esp_err_t aes_crypto_unregister(void) {
   return ESP_OK;
 }
 
-// 内部通用CBC加解密（要求长度是16的倍数）
 static esp_err_t aes_cbc_crypt(const uint8_t *key, size_t key_bits, uint8_t *iv,
                                const uint8_t *input, size_t in_len,
                                uint8_t *output, bool encrypt) {
@@ -110,7 +108,6 @@ esp_err_t aes_cbc_decrypt(const uint8_t *key, size_t key_bits, uint8_t *iv,
   return err;
 }
 
-// ECB 单块加解密
 static esp_err_t aes_ecb_block_crypt(const uint8_t *key, size_t key_bits,
                                      const uint8_t *input, uint8_t *output,
                                      bool encrypt) {
@@ -150,7 +147,6 @@ esp_err_t aes_ecb_decrypt_block(const uint8_t *key, size_t key_bits,
   return aes_ecb_block_crypt(key, key_bits, input, output, false);
 }
 
-// PKCS#7 填充
 static size_t pkcs7_pad(const uint8_t *in, size_t in_len, uint8_t *out,
                         size_t out_capacity) {
   size_t pad_len = 16 - (in_len % 16);
@@ -181,7 +177,6 @@ static size_t pkcs7_unpad(const uint8_t *in, size_t in_len, uint8_t *out,
   return plain_len;
 }
 
-// 加密文件
 esp_err_t aes_encrypt_file(const char *in_path, const char *out_path,
                            const uint8_t *key, size_t key_bits) {
   if (!in_path || !out_path || !key)
@@ -242,7 +237,6 @@ esp_err_t aes_encrypt_file(const char *in_path, const char *out_path,
   return err;
 }
 
-// 解密文件
 esp_err_t aes_decrypt_file(const char *in_path, const char *out_path,
                            const uint8_t *key, size_t key_bits) {
   if (!in_path || !out_path || !key)
@@ -311,7 +305,7 @@ esp_err_t aes_gcm_encrypt(const uint8_t *key, size_t key_bits,
   if (key_bits != 128 && key_bits != 192 && key_bits != 256)
     return ESP_ERR_INVALID_ARG;
   if (tag_len < 4 || tag_len > 16)
-    return ESP_ERR_INVALID_ARG; // GCM 标签推荐 12~16 字节
+    return ESP_ERR_INVALID_ARG;
 
   xSemaphoreTake(s_mutex, portMAX_DELAY);
 
@@ -363,10 +357,8 @@ esp_err_t aes_gcm_decrypt(const uint8_t *key, size_t key_bits,
   mbedtls_gcm_free(&ctx);
   xSemaphoreGive(s_mutex);
 
-  return (ret == 0) ? ESP_OK : ESP_FAIL; // ret != 0 代表认证失败
+  return (ret == 0) ? ESP_OK : ESP_FAIL;
 }
-
-// --------------------- 会话密钥派生（HKDF） ---------------------
 
 esp_err_t derive_session_key(const uint8_t *root_key, size_t root_key_len,
                              const uint8_t *salt, size_t salt_len,
@@ -375,7 +367,6 @@ esp_err_t derive_session_key(const uint8_t *root_key, size_t root_key_len,
   if (!root_key || !info || !session_key || root_key_len == 0)
     return ESP_ERR_INVALID_ARG;
 
-  // 使用 HKDF‑SHA256 扩展出 128 位会话密钥
   int ret =
       mbedtls_hkdf(mbedtls_md_info_from_type(MBEDTLS_MD_SHA256), salt, salt_len,
                    root_key, root_key_len, info, info_len, session_key, 16);

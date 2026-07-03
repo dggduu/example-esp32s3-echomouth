@@ -1,5 +1,6 @@
 option(ENABLE_UNIT_TESTS "Build unit tests" OFF)
 
+# 启用单元测试模式
 set(ENABLE_UNIT_TESTS off)
 
 set(main_srcs "")

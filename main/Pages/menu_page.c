@@ -4,6 +4,8 @@
 
 #include "time_test_helper.h"
 
+#include "nvs_helper.h"
+
 #define MENU_PRIMARY_COLOR lv_color_hex(0x409eff)
 #define MENU_BG_COLOR lv_color_hex(0xf0f0f0)
 #define MENU_TEXT_COLOR lv_color_hex(0x333333)
@@ -23,7 +25,10 @@ static void menu_item_click_cb(lv_event_t *e) {
   } else if (strcmp(txt, "CHAT") == 0) {
     gs_nav_push(&page_chat, NULL);
   } else if (strcmp(txt, "TODO") == 0) {
-    int device_id = 1;
+    int device_id = nvs_helper_get_did();
+    if (device_id == -1)
+      return;
+
     gs_nav_push_async(&page_todo, &device_id);
   }
 }

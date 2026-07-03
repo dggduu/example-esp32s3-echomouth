@@ -156,7 +156,7 @@ void wifi_prov_print_qr(const char *name, const char *username, const char *pop,
   char payload[256] = {0};
   int cur_len = 0;
 
-  // 1. 拼接基础信息
+  // 拼接基础信息
   if (pop) {
     cur_len = snprintf(payload, sizeof(payload),
                        "{\"ver\":\"%s\",\"name\":\"%s\",\"username\":\"%s\","
@@ -175,8 +175,7 @@ void wifi_prov_print_qr(const char *name, const char *username, const char *pop,
   }
 
   if (cur_len < sizeof(payload)) {
-    snprintf(payload + cur_len, sizeof(payload) - cur_len,
-             "}"); // 补齐闭合大括号
+    snprintf(payload + cur_len, sizeof(payload) - cur_len, "}");
   }
 
   qr_display_req_t req = {.qr_data = strdup(payload),
