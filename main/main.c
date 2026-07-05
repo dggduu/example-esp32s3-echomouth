@@ -30,6 +30,7 @@
 #include "time_test_helper.h"
 
 #define OTA_ENRTY_BUTTON_GPIO GPIO_NUM_0
+
 static button_handle_t btn;
 static bool s_ota_mode_active = false;
 extern EventGroupHandle_t wifi_event_group;
@@ -194,7 +195,7 @@ esp_err_t generate_device_key(void) {
     return err;
   }
 
-  //ESP_LOG_BUFFER_HEX("UUID", uuid, 16);
+  // ESP_LOG_BUFFER_HEX("UUID", uuid, 16);
   uint8_t device_key[16];
   // 使用 HKDF 派生
   err = derive_session_key(uuid, 16, NULL, 0,

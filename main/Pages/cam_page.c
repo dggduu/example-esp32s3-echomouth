@@ -19,7 +19,6 @@
 #include "monitor_mamager.h"
 #include "s3_helper.h"
 #include "task_manager.h"
-#include "vector.h"
 
 #define TAG "PAGE_CAM"
 #define CAM_BUTTON_GPIO GPIO_NUM_0
@@ -91,59 +90,37 @@ static void downsample_from_buffer(uint8_t *src, int src_w, int src_h,
     return;
 
   uint16_t *dst16 = (uint16_t *)dst;
-  int dst_w = PREVIEW_W;
-  int dst_h = PREVIEW_H;
-  int src_stride = src_w * 2;
 
-  VECTOR_STACK_INIT(vec_y, CHUNK_SIZE, DTYPE_INT32);
-  VECTOR_STACK_INIT(vec_u, CHUNK_SIZE, DTYPE_INT32);
-  VECTOR_STACK_INIT(vec_v, CHUNK_SIZE, DTYPE_INT32);
-  VECTOR_STACK_INIT(vec_r, CHUNK_SIZE, DTYPE_INT32);
-  VECTOR_STACK_INIT(vec_g, CHUNK_SIZE, DTYPE_INT32);
-  VECTOR_STACK_INIT(vec_b, CHUNK_SIZE, DTYPE_INT32);
-  VECTOR_STACK_INIT(vec_tmp, CHUNK_SIZE, DTYPE_INT32);
+  const int dst_w = PREVIEW_W;
+  const int dst_h = PREVIEW_H;
 
-  int32_t *y_ptr = (int32_t *)vec_y.data;
-  int32_t *u_ptr = (int32_t *)vec_u.data;
-  int32_t *v_ptr = (int32_t *)vec_v.data;
+  const int src_stride = src_w * 2; // YUYV 每像素2字节
 
   for (int y = 0; y < dst_h; y++) {
-    uint8_t *src_row = &src[(y * 2) * src_stride];
-    uint16_t *dst_row = &dst16[y * dst_w];
+    uint8_t *src_row = src + (y * 2) * src_stride;
+    uint16_t *dst_row = dst16 + y * dst_w;
 
-    for (int x = 0; x < dst_w; x += CHUNK_SIZE) {
-      for (int i = 0; i < CHUNK_SIZE; i++) {
-        int src_idx = (x + i) * 2 * 2;
-        y_ptr[i] = src_row[src_idx];
-        u_ptr[i] = (int32_t)src_row[src_idx + 1] - 128;
-        v_ptr[i] = (int32_t)src_row[src_idx + 3] - 128;
-      }
+    for (int x = 0; x < dst_w; x++) {
+      // 每两个源像素取一个
+      int src_idx = x * 4;
 
-      vec_add_scalar(&vec_y, -16, &vec_y);
-      vec_mul_scalar(&vec_y, 1164, &vec_y, 0);
+      int Y = src_row[src_idx];
+      int U = src_row[src_idx + 1] - 128;
+      int V = src_row[src_idx + 3] - 128;
 
-      vec_mul_scalar(&vec_v, 1596, &vec_r, 0);
-      vec_add(&vec_y, &vec_r, &vec_r);
+      Y = (Y - 16) * 1164;
 
-      vec_mul_scalar(&vec_u, 2018, &vec_b, 0);
-      vec_add(&vec_y, &vec_b, &vec_b);
+      int R = (Y + 1596 * V) >> 10;
+      int G = (Y - 813 * V - 391 * U) >> 10;
+      int B = (Y + 2018 * U) >> 10;
 
-      vec_mul_scalar(&vec_v, -813, &vec_g, 0);
-      vec_mul_scalar(&vec_u, -391, &vec_tmp, 0);
-      vec_add(&vec_g, &vec_tmp, &vec_g);
-      vec_add(&vec_y, &vec_g, &vec_g);
+      R = FAST_CLAMP(R);
+      G = FAST_CLAMP(G);
+      B = FAST_CLAMP(B);
 
-      int32_t *r_res = (int32_t *)vec_r.data;
-      int32_t *g_res = (int32_t *)vec_g.data;
-      int32_t *b_res = (int32_t *)vec_b.data;
+      uint16_t rgb565 = ((R & 0xF8) << 8) | ((G & 0xFC) << 3) | (B >> 3);
 
-      for (int i = 0; i < CHUNK_SIZE; i++) {
-        int r = FAST_CLAMP(r_res[i] >> 10);
-        int g = FAST_CLAMP(g_res[i] >> 10);
-        int b = FAST_CLAMP(b_res[i] >> 10);
-        uint16_t rgb565 = ((r & 0xF8) << 8) | ((g & 0xFC) << 3) | (b >> 3);
-        dst_row[x + i] = (rgb565 << 8) | (rgb565 >> 8);
-      }
+      dst_row[x] = (rgb565 << 8) | (rgb565 >> 8);
     }
   }
 }

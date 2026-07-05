@@ -13,8 +13,6 @@
 #include "page_ota.h"
 #include <string.h>
 
-#include "page_ota.h"
-
 #define OTA_RINGBUF_SIZE 8192
 #define OTA_TASK_STACK_SIZE 4096
 
@@ -42,73 +40,64 @@ void ota_recv_fw_cb(uint8_t *buf, uint32_t length) {
 }
 
 void ota_task(void *arg) {
+  esp_partition_t *partition_ptr = NULL;
   esp_partition_t partition;
   const esp_partition_t *next_partition = NULL;
   uint32_t recv_len = 0;
   uint8_t *data = NULL;
   size_t item_size = 0;
+  ESP_LOGI(TAG, "OTA task started (internal RAM stack)");
 
-  // 获取当前运行的分区
-  const esp_partition_t *boot_partition = esp_ota_get_boot_partition();
-  if (boot_partition == NULL ||
-      boot_partition->type != ESP_PARTITION_TYPE_APP) {
+  notify_sem = xSemaphoreCreateCounting(100, 0);
+  xSemaphoreGive(notify_sem);
+
+  partition_ptr = (esp_partition_t *)esp_ota_get_boot_partition();
+  if (partition_ptr == NULL || partition_ptr->type != ESP_PARTITION_TYPE_APP) {
     ESP_LOGE(TAG, "Invalid boot partition");
     goto OTA_ERROR;
   }
 
-  // 确定要写入的 OTA 分区
-  if (boot_partition->subtype == ESP_PARTITION_SUBTYPE_APP_FACTORY) {
+  if (partition_ptr->subtype == ESP_PARTITION_SUBTYPE_APP_FACTORY) {
     partition.subtype = ESP_PARTITION_SUBTYPE_APP_OTA_0;
   } else {
-    next_partition = esp_ota_get_next_update_partition(boot_partition);
+    next_partition = esp_ota_get_next_update_partition(partition_ptr);
     partition.subtype = next_partition ? next_partition->subtype
                                        : ESP_PARTITION_SUBTYPE_APP_OTA_0;
   }
   partition.type = ESP_PARTITION_TYPE_APP;
-  const esp_partition_t *target_partition =
-      esp_partition_find_first(partition.type, partition.subtype, NULL);
-  if (target_partition == NULL) {
+  partition_ptr = (esp_partition_t *)esp_partition_find_first(
+      partition.type, partition.subtype, NULL);
+  if (partition_ptr == NULL) {
     ESP_LOGE(TAG, "Partition not found");
     goto OTA_ERROR;
   }
-  memcpy(&partition, target_partition, sizeof(esp_partition_t));
-
-  // 开始 OTA 写入
+  memcpy(&partition, partition_ptr, sizeof(esp_partition_t));
   if (esp_ota_begin(&partition, OTA_SIZE_UNKNOWN, &s_out_handle) != ESP_OK) {
     ESP_LOGE(TAG, "esp_ota_begin failed");
     goto OTA_ERROR;
   }
 
-  uint32_t total_len = esp_ble_ota_get_fw_length();
-  ESP_LOGI(TAG, "Waiting for firmware data, expected size=%u", total_len);
-  page_ota_notify_status("Receiving firmware...", OTA_STATE_TRANSFERRING);
-
+  ESP_LOGI(TAG, "Waiting for firmware data, expected size=%u",
+           esp_ble_ota_get_fw_length());
   while (1) {
-    // 阻塞等待环缓冲区中的数据
     data = (uint8_t *)xRingbufferReceive(s_ringbuf, &item_size, portMAX_DELAY);
-    if (data == NULL || item_size == 0) {
-      ESP_LOGE(TAG, "Ringbuffer receive error");
-      goto OTA_ERROR;
-    }
-
-    if (esp_ota_write(s_out_handle, (const void *)data, item_size) != ESP_OK) {
-      ESP_LOGE(TAG, "esp_ota_write failed");
+    xSemaphoreTake(notify_sem, portMAX_DELAY);
+    if (item_size) {
+      if (esp_ota_write(s_out_handle, (const void *)data, item_size) !=
+          ESP_OK) {
+        ESP_LOGE(TAG, "esp_ota_write failed");
+        goto OTA_ERROR;
+      }
+      recv_len += item_size;
       vRingbufferReturnItem(s_ringbuf, (void *)data);
-      goto OTA_ERROR;
+      if (recv_len >= esp_ble_ota_get_fw_length()) {
+        xSemaphoreGive(notify_sem);
+        break;
+      }
     }
-
-    recv_len += item_size;
-    vRingbufferReturnItem(s_ringbuf, (void *)data);
-
-    // 更新 UI 进度条
-    page_ota_notify_progress(recv_len, total_len);
-
-    if (recv_len >= total_len) {
-      break;
-    }
+    xSemaphoreGive(notify_sem);
   }
 
-  // 结束 OTA
   if (esp_ota_end(s_out_handle) != ESP_OK) {
     ESP_LOGE(TAG, "esp_ota_end failed");
     goto OTA_ERROR;
@@ -117,16 +106,14 @@ void ota_task(void *arg) {
     ESP_LOGE(TAG, "set_boot_partition failed");
     goto OTA_ERROR;
   }
-
-  page_ota_notify_status("Update success, restarting...", OTA_STATE_SUCCESS);
-  vTaskDelay(pdMS_TO_TICKS(100));
+  vSemaphoreDelete(notify_sem);
   esp_restart();
 
 OTA_ERROR:
-  page_ota_notify_status("Update failed!", OTA_STATE_FAILED);
   ESP_LOGE(TAG, "OTA failed");
   vTaskDelete(NULL);
 }
+
 bool ota_backend_init(void) {
   if (s_started)
     return true;
