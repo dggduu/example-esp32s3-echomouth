@@ -109,7 +109,12 @@ static lv_obj_t *splash_page(lv_obj_t *parent, void *ctx) {
                              LV_PART_INDICATOR);
 
   lv_obj_t *label = lv_label_create(cont);
+  lv_obj_t *label_version = lv_label_create(cont);
+  char version[50];
+  snprintf(version, sizeof(version), "ver:%s", "0.1.1");
   lv_label_set_text(label, "初始化中...");
+  lv_label_set_text(label_version, version);
+
   lv_obj_set_style_text_color(label, lv_color_hex(0x000000), 0);
   lv_obj_align(label, LV_ALIGN_CENTER, 0, 40);
 

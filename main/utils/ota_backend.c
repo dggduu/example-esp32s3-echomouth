@@ -23,7 +23,7 @@ static TaskHandle_t s_ota_task = NULL;
 static esp_ota_handle_t s_out_handle = 0;
 SemaphoreHandle_t notify_sem = NULL;
 static bool s_started = false;
-
+bool transferring = false;
 bool ble_ota_ringbuf_init(uint32_t ringbuf_size) {
   s_ringbuf = xRingbufferCreate(ringbuf_size, RINGBUF_TYPE_BYTEBUF);
   return (s_ringbuf != NULL);
@@ -89,6 +89,12 @@ void ota_task(void *arg) {
         goto OTA_ERROR;
       }
       recv_len += item_size;
+      page_ota_notify_progress(recv_len, esp_ble_ota_get_fw_length());
+
+      if (!transferring) {
+        transferring = true;
+        page_ota_notify_status("更新中...", OTA_STATE_TRANSFERRING);
+      }
       vRingbufferReturnItem(s_ringbuf, (void *)data);
       if (recv_len >= esp_ble_ota_get_fw_length()) {
         xSemaphoreGive(notify_sem);
@@ -111,6 +117,7 @@ void ota_task(void *arg) {
 
 OTA_ERROR:
   ESP_LOGE(TAG, "OTA failed");
+  page_ota_notify_status("OTA失败", OTA_STATE_FAILED);
   vTaskDelete(NULL);
 }
 
@@ -154,7 +161,7 @@ bool ota_backend_init(void) {
              OTA_TASK_STACK_SIZE);
   }
 
-  page_ota_notify_status("Waiting for connection...", OTA_STATE_IDLE);
+  page_ota_notify_status("等待连接...", OTA_STATE_IDLE);
   s_started = true;
   return true;
 }

@@ -20,11 +20,11 @@ extern const uint8_t ulp_main_bin_end[] asm("_binary_ulp_main_bin_end");
 
 static const char *TAG = "PWR_MGR";
 
-#define ECO_TIMEOUT_MS (1 * 15 * 1000) /* 3 min idle → dim to 60% */
+#define ECO_TIMEOUT_MS (3 * 60 * 1000) /* 3 min idle → dim to 60% */
 #define DIM_WARNING_MS 10000           /* 10 s dim warning → ECO   */
 #define DEEP_SLEEP_TIMEOUT_MS                                                  \
-  (1 * 20 * 1000) /* 10 min in ECO → deep sleep                              \
-                   */
+  (10 * 60 * 1000) /* 10 min in ECO → deep sleep                             \
+                    */
 
 typedef enum {
   PWR_STATE_NORMAL = 0,

@@ -20,41 +20,40 @@ typedef struct {
   lv_obj_t *btn_exit;
 } page_ota_ctx_t;
 
+typedef struct {
+  uint32_t current_bytes;
+  uint32_t total_bytes;
+  ota_state_t state;
+  char status[64];
+  bool progress_dirty;
+  bool status_dirty;
+} ota_ui_data_t;
+
+static ota_ui_data_t s_ui_data = {
+    .state = OTA_STATE_IDLE,
+};
+
 static page_ota_ctx_t *s_ota_ui_ctx = NULL;
 
 static void btn_exit_event_cb(lv_event_t *e) { gs_nav_pop_async(); }
 
 void page_ota_notify_progress(uint32_t current_bytes, uint32_t total_bytes) {
-  if (s_ota_ui_ctx == NULL || total_bytes == 0)
-    return;
-  uint32_t percent = (current_bytes * 100) / total_bytes;
-
-  if (lvgl_port_lock(0)) {
-    if (s_ota_ui_ctx->bar_progress)
-      lv_bar_set_value(s_ota_ui_ctx->bar_progress, percent, LV_ANIM_ON);
-    if (s_ota_ui_ctx->lbl_percent)
-      lv_label_set_text_fmt(s_ota_ui_ctx->lbl_percent, "%lu%%", percent);
-    lvgl_port_unlock();
-  }
+  s_ui_data.current_bytes = current_bytes;
+  s_ui_data.total_bytes = total_bytes;
+  s_ui_data.progress_dirty = true;
 }
 
 void page_ota_notify_status(const char *status_msg, int state) {
-  if (s_ota_ui_ctx == NULL || status_msg == NULL)
+  if (!status_msg)
     return;
 
-  if (lvgl_port_lock(0)) {
-    if (s_ota_ui_ctx->lbl_status)
-      lv_label_set_text(s_ota_ui_ctx->lbl_status, status_msg);
+  s_ui_data.state = state;
 
-    if (s_ota_ui_ctx->btn_exit) {
-      if (state == OTA_STATE_CONNECTED || state == OTA_STATE_TRANSFERRING) {
-        lv_obj_add_state(s_ota_ui_ctx->btn_exit, LV_STATE_DISABLED);
-      } else if (state == OTA_STATE_FAILED) {
-        lv_obj_clear_state(s_ota_ui_ctx->btn_exit, LV_STATE_DISABLED);
-      }
-    }
-    lvgl_port_unlock();
-  }
+  strncpy(s_ui_data.status, status_msg, sizeof(s_ui_data.status) - 1);
+
+  s_ui_data.status[sizeof(s_ui_data.status) - 1] = '\0';
+
+  s_ui_data.status_dirty = true;
 }
 
 static void *page_ota_init(void *args) {
@@ -80,6 +79,47 @@ static void *page_ota_init(void *args) {
 
   s_ota_ui_ctx = ctx;
   return ctx;
+}
+
+static void page_ota_update(void *ctx_ptr) {
+  page_ota_ctx_t *ctx = ctx_ptr;
+
+  if (!ctx)
+    return;
+
+  if (s_ui_data.progress_dirty) {
+
+    s_ui_data.progress_dirty = false;
+
+    uint32_t percent = 0;
+
+    if (s_ui_data.total_bytes != 0) {
+      percent = s_ui_data.current_bytes * 100 / s_ui_data.total_bytes;
+    }
+
+    lv_bar_set_value(ctx->bar_progress, percent, LV_ANIM_OFF);
+
+    lv_label_set_text_fmt(ctx->lbl_percent, "%lu%%", percent);
+  }
+
+  if (s_ui_data.status_dirty) {
+
+    s_ui_data.status_dirty = false;
+
+    lv_label_set_text(ctx->lbl_status, s_ui_data.status);
+
+    if (ctx->btn_exit) {
+
+      if (s_ui_data.state == OTA_STATE_CONNECTED ||
+          s_ui_data.state == OTA_STATE_TRANSFERRING) {
+
+        lv_obj_add_state(ctx->btn_exit, LV_STATE_DISABLED);
+      } else {
+
+        lv_obj_clear_state(ctx->btn_exit, LV_STATE_DISABLED);
+      }
+    }
+  }
 }
 
 static lv_obj_t *page_ota_render(lv_obj_t *parent, void *ctx_ptr) {
@@ -126,7 +166,9 @@ static void page_ota_deinit(void *ctx_ptr) {
   free(ctx_ptr);
 }
 
-const gs_page_desc_t page_ota = {.init_cb = page_ota_init,
-                                 .render_cb = page_ota_render,
-                                 .deinit_cb = page_ota_deinit,
-                                 .update_cb = NULL};
+const gs_page_desc_t page_ota = {
+    .init_cb = page_ota_init,
+    .render_cb = page_ota_render,
+    .deinit_cb = page_ota_deinit,
+    .update_cb = page_ota_update,
+};
