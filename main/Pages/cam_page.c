@@ -1,4 +1,5 @@
 #include "button_gpio.h"
+#include "cam_helper.h"
 #include "cam_shared.h"
 #include "esp_camera.h"
 #include "esp_heap_caps.h"
@@ -17,6 +18,7 @@
 #include <string.h>
 
 #include "monitor_mamager.h"
+#include "power_manager.h"
 #include "s3_helper.h"
 #include "task_manager.h"
 
@@ -145,10 +147,10 @@ static void cam_fetch_task(void *arg) {
   temp_yuv_buf = local_temp;
 
   for (int retry = 0; retry < 5 && !s_stop_fetch; retry++) {
-    camera_fb_t *fb = esp_camera_fb_get();
+    camera_fb_t *fb = cam_helper_get_fb();
     if (fb) {
       memcpy(local_temp, fb->buf, fb->len);
-      esp_camera_fb_return(fb);
+      cam_helper_return_fb(fb);
       downsample_from_buffer(local_temp, SRC_W, SRC_H, preview_buf);
       break;
     }
@@ -161,7 +163,7 @@ static void cam_fetch_task(void *arg) {
       continue;
     }
 
-    camera_fb_t *fb = esp_camera_fb_get();
+    camera_fb_t *fb = cam_helper_get_fb();
     if (!fb) {
       vTaskDelay(pdMS_TO_TICKS(10));
       continue;
@@ -169,7 +171,7 @@ static void cam_fetch_task(void *arg) {
 
     memcpy(local_temp, fb->buf, fb->len);
 
-    esp_camera_fb_return(fb);
+    cam_helper_return_fb(fb);
 
     downsample_from_buffer(local_temp, SRC_W, SRC_H, preview_buf);
 
@@ -198,7 +200,7 @@ static void cam_take_picture(void) {
   if (s_state != CAM_STATE_PREVIEW)
     return;
 
-  captured_fb = esp_camera_fb_get();
+  captured_fb = cam_helper_get_fb();
   if (!captured_fb)
     return;
 
@@ -302,7 +304,7 @@ static void cam_save_picture(void) {
 
   jpeg_free_align(jpg_buf);
   jpeg_enc_close(enc);
-  esp_camera_fb_return(captured_fb);
+  cam_helper_return_fb(captured_fb);
   captured_fb = NULL;
 }
 
@@ -310,7 +312,7 @@ static void cam_cancel_capture(void) {
   if (s_state != CAM_STATE_CAPTURED)
     return;
   if (captured_fb) {
-    esp_camera_fb_return(captured_fb);
+    cam_helper_return_fb(captured_fb);
     captured_fb = NULL;
   }
   s_state = CAM_STATE_PREVIEW;
@@ -352,6 +354,14 @@ static void *page_cam_init(void *args) {
   }
 
   monitor_task_pause();
+  power_manager_report_activity();
+
+  esp_err_t cam_ret = cam_helper_acquire();
+  if (cam_ret != ESP_OK) {
+    ESP_LOGE(TAG, "Failed to acquire camera");
+    return NULL;
+  }
+
   s_shared_ctx->task_id = page_args->task_id;
   s_shared_ctx->device_id = page_args->device_id;
 
@@ -462,7 +472,7 @@ static void page_cam_deinit(void *ctx) {
   }
 
   if (captured_fb) {
-    esp_camera_fb_return(captured_fb);
+    cam_helper_return_fb(captured_fb);
     captured_fb = NULL;
   }
   if (preview_buf) {
@@ -476,6 +486,7 @@ static void page_cam_deinit(void *ctx) {
     s_shared_ctx->done_sem = NULL;
   }
   img_obj = NULL;
+  cam_helper_release();
   monitor_task_resume();
 }
 

@@ -1,5 +1,6 @@
 #include "monitor_mamager.h"
 #include "cJSON.h"
+#include "cam_helper.h"
 #include "esp_camera.h"
 #include "esp_jpeg_enc.h"
 #include "esp_log.h"
@@ -100,7 +101,7 @@ static bool capture_and_enqueue(void) {
     return false;
   }
 
-  camera_fb_t *fb = esp_camera_fb_get();
+  camera_fb_t *fb = cam_helper_get_fb();
   if (!fb) {
     ESP_LOGE(TAG, "Camera capture failed");
     return false;
@@ -119,7 +120,7 @@ static bool capture_and_enqueue(void) {
 
   jpeg_enc_handle_t enc;
   if (jpeg_enc_open(&cfg, &enc) != JPEG_ERR_OK) {
-    esp_camera_fb_return(fb);
+    cam_helper_return_fb(fb);
     return false;
   }
 
@@ -127,7 +128,7 @@ static bool capture_and_enqueue(void) {
   uint8_t *jpg_buf = jpeg_calloc_align(jpg_buf_size, 16);
   if (!jpg_buf) {
     jpeg_enc_close(enc);
-    esp_camera_fb_return(fb);
+    cam_helper_return_fb(fb);
     return false;
   }
 
@@ -135,7 +136,7 @@ static bool capture_and_enqueue(void) {
   esp_err_t ret =
       jpeg_enc_process(enc, fb->buf, fb->len, jpg_buf, jpg_buf_size, &out_len);
   jpeg_enc_close(enc);
-  esp_camera_fb_return(fb);
+  cam_helper_return_fb(fb);
 
   if (ret != JPEG_ERR_OK || out_len == 0) {
     jpeg_free_align(jpg_buf);
@@ -267,6 +268,7 @@ static void monitor_task_func(void *arg) {
     case MONITOR_STATE_SLEEP:
       if (now_us >= s_next_wake_time_us) {
         ESP_LOGI(TAG, "Interval reached, WAIT_FACE");
+        cam_helper_acquire();
         s_state = MONITOR_STATE_WAIT_FACE;
         s_face_wait_start_us = now_us;
       } else {
@@ -307,6 +309,7 @@ static void monitor_task_func(void *arg) {
           s_current_interval_sec = INTERVAL_MAX_SEC;
         s_next_wake_time_us =
             esp_timer_get_time() + (int64_t)s_current_interval_sec * 1000000;
+        cam_helper_release();
         s_state = MONITOR_STATE_SLEEP;
         break;
       }
@@ -321,6 +324,7 @@ static void monitor_task_func(void *arg) {
       }
       s_next_wake_time_us =
           esp_timer_get_time() + (int64_t)s_current_interval_sec * 1000000;
+      cam_helper_release();
       s_state = MONITOR_STATE_SLEEP;
       ESP_LOGI(TAG, "Cycle done, next wake in %d sec", s_current_interval_sec);
       break;

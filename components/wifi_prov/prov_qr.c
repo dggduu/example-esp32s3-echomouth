@@ -8,9 +8,6 @@
 #include <stdlib.h>
 #include <string.h>
 
-#include "mbedtls/base64.h"
-#include "nvs_helper.h"
-
 #define TAG "prov_qr"
 #define PROV_QR_VERSION "v1"
 
@@ -64,7 +61,8 @@ static void *qr_page_init(void *args) {
     return NULL;
 
   ctx->qr_data = strdup(qr_data);
-  ctx->hint_text = hint_text ? strdup(hint_text) : strdup("APP扫码");
+  ctx->hint_text =
+      hint_text ? strdup(hint_text) : strdup("Scan QR code to provision");
   s_qr_page_active = true;
   return ctx;
 }
@@ -141,46 +139,22 @@ void wifi_prov_print_qr(const char *name, const char *username, const char *pop,
     return;
   }
 
-  // 读取设备派生密钥
-  char dev_key_b64[25] = {0};
-  uint8_t device_key[16];
-  if (nvs_helper_get_device_key(device_key) == ESP_OK) {
-    size_t b64_len = 0;
-    mbedtls_base64_encode((unsigned char *)dev_key_b64, sizeof(dev_key_b64),
-                          &b64_len, device_key, 16);
-    dev_key_b64[b64_len] = '\0';
-  } else {
-    ESP_LOGW(TAG, "Device key not found in NVS, QR will not contain devKey");
-  }
-
-  char payload[256] = {0};
-  int cur_len = 0;
-
-  // 拼接基础信息
+  char payload[150] = {0};
   if (pop) {
-    cur_len = snprintf(payload, sizeof(payload),
-                       "{\"ver\":\"%s\",\"name\":\"%s\",\"username\":\"%s\","
-                       "\"pop\":\"%s\",\"transport\":\"%s\"",
-                       PROV_QR_VERSION, name, username ? username : "", pop,
-                       transport);
+    snprintf(payload, sizeof(payload),
+             "{\"ver\":\"%s\",\"name\":\"%s\""
+             ",\"username\":\"%s\",\"pop\":\"%s\",\"transport\":\"%s\"}",
+             PROV_QR_VERSION, name, username, pop, transport);
   } else {
-    cur_len = snprintf(payload, sizeof(payload),
-                       "{\"ver\":\"%s\",\"name\":\"%s\",\"transport\":\"%s\"",
-                       PROV_QR_VERSION, name, transport);
+    snprintf(payload, sizeof(payload),
+             "{\"ver\":\"%s\",\"name\":\"%s\""
+             ",\"transport\":\"%s\"}",
+             PROV_QR_VERSION, name, transport);
   }
 
-  if (strlen(dev_key_b64) > 0 && cur_len < sizeof(payload)) {
-    cur_len += snprintf(payload + cur_len, sizeof(payload) - cur_len,
-                        ",\"devKey\":\"%s\"", dev_key_b64);
-  }
-
-  if (cur_len < sizeof(payload)) {
-    snprintf(payload + cur_len, sizeof(payload) - cur_len, "}");
-  }
-
-  qr_display_req_t req = {.qr_data = strdup(payload),
-                          .hint_text = strdup("APP扫码")};
-
+  qr_display_req_t req = {
+      .qr_data = strdup(payload),
+      .hint_text = strdup("Scan this QR code to start provisioning")};
   if (!req.qr_data || !req.hint_text) {
     free(req.qr_data);
     free(req.hint_text);

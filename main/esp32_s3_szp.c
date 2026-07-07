@@ -815,5 +815,38 @@ esp_err_t bsp_codec_volume_set(int volume, int *volume_set) {
   return ret;
 }
 
+esp_err_t bsp_codec_deinit(void) {
+  if (play_dev_handle) {
+    esp_codec_dev_close(play_dev_handle);
+    esp_codec_dev_delete(play_dev_handle);
+    play_dev_handle = NULL;
+  }
+  if (record_dev_handle) {
+    esp_codec_dev_close(record_dev_handle);
+    esp_codec_dev_delete(record_dev_handle);
+    record_dev_handle = NULL;
+  }
+  if (i2s_data_if) {
+    audio_codec_delete_data_if(i2s_data_if);
+    i2s_data_if = NULL;
+  }
+  if (i2s_tx_chan) {
+    i2s_channel_disable(i2s_tx_chan);
+    i2s_del_channel(i2s_tx_chan);
+    i2s_tx_chan = NULL;
+  }
+  if (i2s_rx_chan) {
+    i2s_channel_disable(i2s_rx_chan);
+    i2s_del_channel(i2s_rx_chan);
+    i2s_rx_chan = NULL;
+  }
+  ESP_LOGI(TAG, "Audio codec deinitialized");
+  return ESP_OK;
+}
+
+esp_lcd_touch_handle_t bsp_get_touch_handle(void) { return tp; }
+
+lv_indev_t *bsp_get_touch_indev(void) { return disp_indev; }
+
 /*********************    音频 ↑   *************************/
 /***********************************************************/

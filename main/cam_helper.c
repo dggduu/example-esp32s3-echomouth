@@ -30,6 +30,7 @@ esp_err_t cam_helper_acquire(void) {
     return ESP_OK;
   }
 
+  dvp_pwdn(0);
   bsp_camera_init();
 
   s_cam_running = true;
@@ -53,6 +54,7 @@ void cam_helper_release(void) {
 
   if (s_ref_count <= 0) {
     esp_camera_deinit();
+    dvp_pwdn(1);
     s_cam_running = false;
     s_ref_count = 0;
     ESP_LOGI(TAG, "Camera stopped");

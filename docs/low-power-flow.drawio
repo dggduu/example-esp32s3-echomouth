@@ -1,0 +1,186 @@
+<mxfile host="Electron" agent="Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 (KHTML, like Gecko) draw.io/24.7.8 Chrome/128.0.6613.186 Electron/32.1.2 Safari/537.36" version="24.7.8">
+  <diagram name="Page-1" id="page-1">
+    <mxGraphModel dx="1200" dy="600" grid="1" gridSize="10" guides="1" tooltips="1" connect="1" arrows="1" fold="1" page="0" pageScale="1" pageWidth="1200" pageHeight="800" math="0" shadow="0">
+      <root>
+        <mxCell id="0"/>
+        <mxCell id="1" parent="0"/>
+
+        <!-- Title -->
+        <mxCell id="title" value="ESP32-S3 Low-Power Management State Flow" style="text;html=1;fontSize=16;fontStyle=1;align=center;verticalAlign=middle;whiteSpace=wrap;" vertex="1" parent="1">
+          <mxGeometry x="340" y="10" width="500" height="40"/>
+        </mxCell>
+
+        <!-- Block condition note -->
+        <mxCell id="block_note" value="Block condition (all transitions are blocked when):<br>  · active_task ≠ 0 (task_manager)<br>  · cam_helper_is_running() (camera in use)<br>→ timer restarts, state unchanged" style="text;html=1;fontSize=10;align=left;verticalAlign=middle;whiteSpace=wrap;fillColor=#fff0f0;strokeColor=#ff0000;rounded=1;overflow=hidden;" vertex="1" parent="1">
+          <mxGeometry x="60" y="60" width="340" height="55"/>
+        </mxCell>
+
+        <!-- ─── NORMAL ─── -->
+        <mxCell id="normal" value="NORMAL" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#60a917;strokeColor=#2d7600;fontColor=#ffffff;fontSize=14;fontStyle=1;" vertex="1" parent="1">
+          <mxGeometry x="60" y="170" width="110" height="40"/>
+        </mxCell>
+        <mxCell id="normal_desc" value="Backlight 100%<br>CPU 240MHz<br>PA ON" style="text;html=1;fontSize=11;align=center;verticalAlign=middle;whiteSpace=wrap;" vertex="1" parent="1">
+          <mxGeometry x="50" y="215" width="130" height="50"/>
+        </mxCell>
+
+        <!-- NORMAL → DIMMING -->
+        <mxCell id="n2d_arrow" value="15s idle &amp; no task &amp; no camera" style="endArrow=classic;html=1;fontSize=10;edgeStyle=orthogonalEdgeStyle;verticalAlign=bottom;align=center;" edge="1" parent="1">
+          <mxGeometry relative="1" as="geometry">
+            <mxPoint x="170" y="190"/>
+            <mxPoint x="305" y="190"/>
+          </mxGeometry>
+        </mxCell>
+
+        <!-- ─── DIMMING ─── -->
+        <mxCell id="dim" value="DIMMING" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#f0a30a;strokeColor=#bd7000;fontColor=#ffffff;fontSize=14;fontStyle=1;" vertex="1" parent="1">
+          <mxGeometry x="320" y="170" width="110" height="40"/>
+        </mxCell>
+        <mxCell id="dim_desc" value="Backlight 30%<br>CPU 240MHz (still)<br>10s warning countdown" style="text;html=1;fontSize=11;align=center;verticalAlign=middle;whiteSpace=wrap;" vertex="1" parent="1">
+          <mxGeometry x="310" y="215" width="130" height="50"/>
+        </mxCell>
+
+        <!-- DIMMING → ECO -->
+        <mxCell id="d2e_arrow" value="10s timeout (dim_timer)" style="endArrow=classic;html=1;fontSize=10;edgeStyle=orthogonalEdgeStyle;verticalAlign=bottom;align=center;" edge="1" parent="1">
+          <mxGeometry relative="1" as="geometry">
+            <mxPoint x="430" y="190"/>
+            <mxPoint x="555" y="190"/>
+          </mxGeometry>
+        </mxCell>
+
+        <!-- ─── ECO ─── -->
+        <mxCell id="eco" value="ECO" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#e51400;strokeColor=#b00000;fontColor=#ffffff;fontSize=14;fontStyle=1;" vertex="1" parent="1">
+          <mxGeometry x="570" y="170" width="110" height="40"/>
+        </mxCell>
+        <mxCell id="eco_desc" value="Backlight OFF<br>CPU freq min (DFS)<br>PA OFF" style="text;html=1;fontSize=11;align=center;verticalAlign=middle;whiteSpace=wrap;" vertex="1" parent="1">
+          <mxGeometry x="560" y="215" width="130" height="50"/>
+        </mxCell>
+
+        <!-- ECO → DEEP_SLEEP -->
+        <mxCell id="e2ds_arrow" value="2min idle (ds_timer)" style="endArrow=classic;html=1;fontSize=10;edgeStyle=orthogonalEdgeStyle;verticalAlign=bottom;align=center;" edge="1" parent="1">
+          <mxGeometry relative="1" as="geometry">
+            <mxPoint x="680" y="190"/>
+            <mxPoint x="805" y="190"/>
+          </mxGeometry>
+        </mxCell>
+
+        <!-- ─── DEEP_SLEEP ─── -->
+        <mxCell id="deep" value="DEEP SLEEP" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#76608a;strokeColor=#4f3a64;fontColor=#ffffff;fontSize=14;fontStyle=1;" vertex="1" parent="1">
+          <mxGeometry x="820" y="170" width="120" height="40"/>
+        </mxCell>
+        <mxCell id="deep_desc" value="CPU OFF<br>ULP RISC-V runs<br>20ms scan GPIO0" style="text;html=1;fontSize=11;align=center;verticalAlign=middle;whiteSpace=wrap;" vertex="1" parent="1">
+          <mxGeometry x="810" y="215" width="140" height="50"/>
+        </mxCell>
+
+        <!-- ─── Return arrows ─── -->
+
+        <!-- DIMMING → NORMAL (user activity) -->
+        <mxCell id="back_dim" value="" style="endArrow=classic;html=1;fontSize=11;edgeStyle=orthogonalEdgeStyle;strokeColor=#60a917;strokeWidth=2;" edge="1" parent="1">
+          <mxGeometry relative="1" as="geometry">
+            <mxPoint x="375" y="280"/>
+            <mxPoint x="115" y="280"/>
+          </mxGeometry>
+        </mxCell>
+
+        <!-- ECO → NORMAL (user activity) -->
+        <mxCell id="back_eco" value="" style="endArrow=classic;html=1;fontSize=11;edgeStyle=orthogonalEdgeStyle;strokeColor=#60a917;strokeWidth=2;" edge="1" parent="1">
+          <mxGeometry relative="1" as="geometry">
+            <mxPoint x="625" y="300"/>
+            <mxPoint x="115" y="300"/>
+          </mxGeometry>
+        </mxCell>
+
+        <mxCell id="back_label" value="Touch / GPIO0 / new task (power_manager_report_activity) → back to NORMAL" style="text;html=1;fontSize=11;align=center;verticalAlign=middle;whiteSpace=wrap;strokeColor=none;fontColor=#008000;" vertex="1" parent="1">
+          <mxGeometry x="160" y="282" width="340" height="20"/>
+        </mxCell>
+
+        <!-- DEEP_SLEEP → NORMAL (system reset) -->
+        <mxCell id="reset_arrow" value="" style="endArrow=classic;html=1;fontSize=11;edgeStyle=orthogonalEdgeStyle;dashed=1;strokeColor=#76608a;" edge="1" parent="1">
+          <mxGeometry relative="1" as="geometry">
+            <mxPoint x="880" y="300"/>
+            <mxPoint x="115" y="320"/>
+          </mxGeometry>
+        </mxCell>
+        <mxCell id="reset_label" value="GPIO0 press → 100ms debounce → ULP wake → system reset → app_main" style="text;html=1;fontSize=10;align=center;verticalAlign=middle;whiteSpace=wrap;strokeColor=none;fontColor=#76608a;" vertex="1" parent="1">
+          <mxGeometry x="350" y="310" width="350" height="20"/>
+        </mxCell>
+
+        <!-- ─── Legend ─── -->
+        <mxCell id="legend_box" value="" style="rounded=1;whiteSpace=wrap;html=1;fillColor=none;strokeColor=#999999;dashed=1;" vertex="1" parent="1">
+          <mxGeometry x="60" y="400" width="1080" height="110"/>
+        </mxCell>
+
+        <mxCell id="leg_title" value="Legend" style="text;html=1;fontSize=12;fontStyle=1;align=left;" vertex="1" parent="1">
+          <mxGeometry x="70" y="405" width="60" height="20"/>
+        </mxCell>
+
+        <!-- Color swatches -->
+        <mxCell id="leg_normal_c" value="" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#60a917;" vertex="1" parent="1">
+          <mxGeometry x="70" y="430" width="20" height="16"/>
+        </mxCell>
+        <mxCell id="leg_normal_t" value="NORMAL — full speed" style="text;html=1;fontSize=10;align=left;verticalAlign=middle;whiteSpace=wrap;strokeColor=none;" vertex="1" parent="1">
+          <mxGeometry x="95" y="428" width="130" height="20"/>
+        </mxCell>
+
+        <mxCell id="leg_dim_c" value="" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#f0a30a;" vertex="1" parent="1">
+          <mxGeometry x="70" y="450" width="20" height="16"/>
+        </mxCell>
+        <mxCell id="leg_dim_t" value="DIMMING — 30% backlight, 10s warning" style="text;html=1;fontSize=10;align=left;verticalAlign=middle;whiteSpace=wrap;strokeColor=none;" vertex="1" parent="1">
+          <mxGeometry x="95" y="448" width="190" height="20"/>
+        </mxCell>
+
+        <mxCell id="leg_eco_c" value="" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#e51400;" vertex="1" parent="1">
+          <mxGeometry x="70" y="470" width="20" height="16"/>
+        </mxCell>
+        <mxCell id="leg_eco_t" value="ECO — backlight off, CPU min, PA off" style="text;html=1;fontSize=10;align=left;verticalAlign=middle;whiteSpace=wrap;strokeColor=none;" vertex="1" parent="1">
+          <mxGeometry x="95" y="468" width="190" height="20"/>
+        </mxCell>
+
+        <mxCell id="leg_ds_c" value="" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#76608a;" vertex="1" parent="1">
+          <mxGeometry x="70" y="490" width="20" height="16"/>
+        </mxCell>
+        <mxCell id="leg_ds_t" value="DEEP SLEEP — ULP RISC-V monitors GPIO0" style="text;html=1;fontSize=10;align=left;verticalAlign=middle;whiteSpace=wrap;strokeColor=none;" vertex="1" parent="1">
+          <mxGeometry x="95" y="488" width="220" height="20"/>
+        </mxCell>
+
+        <!-- Arrow legends -->
+        <mxCell id="leg_fwd_a" value="" style="endArrow=classic;html=1;fontSize=10;edgeStyle=orthogonalEdgeStyle;" edge="1" parent="1">
+          <mxGeometry relative="1" as="geometry">
+            <mxPoint x="360" y="438"/>
+            <mxPoint x="420" y="438"/>
+          </mxGeometry>
+        </mxCell>
+        <mxCell id="leg_fwd_t" value="Forward (timer expires)" style="text;html=1;fontSize=10;align=left;verticalAlign=middle;whiteSpace=wrap;strokeColor=none;" vertex="1" parent="1">
+          <mxGeometry x="425" y="432" width="140" height="20"/>
+        </mxCell>
+
+        <mxCell id="leg_ret_a" value="" style="endArrow=classic;html=1;fontSize=10;edgeStyle=orthogonalEdgeStyle;strokeColor=#60a917;strokeWidth=2;" edge="1" parent="1">
+          <mxGeometry relative="1" as="geometry">
+            <mxPoint x="360" y="460"/>
+            <mxPoint x="420" y="460"/>
+          </mxGeometry>
+        </mxCell>
+        <mxCell id="leg_ret_t" value="Return (user activity)" style="text;html=1;fontSize=10;align=left;verticalAlign=middle;whiteSpace=wrap;strokeColor=none;" vertex="1" parent="1">
+          <mxGeometry x="425" y="454" width="140" height="20"/>
+        </mxCell>
+
+        <mxCell id="leg_ds_a" value="" style="endArrow=classic;html=1;fontSize=10;edgeStyle=orthogonalEdgeStyle;dashed=1;strokeColor=#76608a;" edge="1" parent="1">
+          <mxGeometry relative="1" as="geometry">
+            <mxPoint x="360" y="482"/>
+            <mxPoint x="420" y="482"/>
+          </mxGeometry>
+        </mxCell>
+        <mxCell id="leg_ds_a_t" value="Return (system reset)" style="text;html=1;fontSize=10;align=left;verticalAlign=middle;whiteSpace=wrap;strokeColor=none;" vertex="1" parent="1">
+          <mxGeometry x="425" y="476" width="140" height="20"/>
+        </mxCell>
+
+        <!-- Timer summary -->
+        <mxCell id="timer_title" value="Timer Summary" style="text;html=1;fontSize=12;fontStyle=1;align=left;" vertex="1" parent="1">
+          <mxGeometry x="640" y="405" width="100" height="20"/>
+        </mxCell>
+        <mxCell id="timer_summary" value="eco_timer:   15s (one-shot)   NORMAL → DIMMING<br>dim_timer:    10s (one-shot)   DIMMING   → ECO<br>ds_timer:       2min (one-shot)  ECO          → DEEP_SLEEP<br><br>Any user activity → eco_timer resets<br>DIMMING/ECO → NORMAL → dim_timer &amp; ds_timer stop" style="text;html=1;fontSize=10;align=left;verticalAlign=middle;whiteSpace=wrap;strokeColor=none;" vertex="1" parent="1">
+          <mxGeometry x="640" y="428" width="380" height="75"/>
+        </mxCell>
+      </root>
+    </mxGraphModel>
+  </diagram>
+</mxfile>

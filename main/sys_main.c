@@ -16,6 +16,9 @@
 
 #include "s3_helper.h"
 
+#include "audio_helper.h"
+#include "power_manager.h"
+
 #include "face_detector_helper.h"
 
 #include "button_gpio.h"
@@ -140,17 +143,50 @@ static void on_notify_received(uint32_t msg_id, uint8_t sender,
   gs_portal_toast_show(cfg);
 }
 
+static volatile bool s_gpio0_activity = false;
+
+static void touch_indev_event_cb(lv_event_t *e) {
+  power_manager_report_activity();
+}
+
 void gui_flsuh_task(void *param) {
   while (1) {
     if (lvgl_port_lock(-1)) {
       uint32_t sleep_ms = lv_timer_handler();
       gs_nav_loop();
+
+      if (s_gpio0_activity) {
+        s_gpio0_activity = false;
+        power_manager_report_activity();
+      }
+
+      lv_indev_t *indev = lv_indev_get_act();
+      if (indev && lv_indev_get_state(indev) == LV_INDEV_STATE_PR) {
+        power_manager_report_activity();
+      }
+
       lvgl_port_unlock();
       vTaskDelay(pdMS_TO_TICKS(sleep_ms <= 0 ? 10 : sleep_ms));
     } else {
       vTaskDelay(pdMS_TO_TICKS(100));
     }
   }
+}
+
+static void IRAM_ATTR gpio0_isr_handler(void *arg) { s_gpio0_activity = true; }
+
+static void gpio0_activity_init(void) {
+  gpio_config_t io_conf = {
+      .pin_bit_mask = BIT64(GPIO_NUM_0),
+      .mode = GPIO_MODE_INPUT,
+      .pull_up_en = GPIO_PULLUP_ENABLE,
+      .pull_down_en = GPIO_PULLDOWN_DISABLE,
+      .intr_type = GPIO_INTR_NEGEDGE,
+  };
+  gpio_config(&io_conf);
+  gpio_install_isr_service(0);
+  gpio_isr_handler_add(GPIO_NUM_0, gpio0_isr_handler, NULL);
+  ESP_LOGI(TAG, "GPIO0 activity ISR installed");
 }
 
 void init_mdns(const char *hostname) {
@@ -316,6 +352,12 @@ void efuse_init() {
 #include "nvs_helper.h"
 
 void app_main(void) {
+  if (power_manager_is_deep_sleep_wakeup()) {
+    ESP_LOGI(TAG, "=== Resuming from ULP deep sleep ===");
+    /* Skip ULP reload — it is still in RTC memory.
+     * Just restore the display and resume normal operation. */
+  }
+
   bsp_i2c_init();
   pca9557_init();
   bsp_lvgl_start();
@@ -342,6 +384,16 @@ void app_main(void) {
     gs_nav_push(&page_ota, NULL);
     return;
   } else {
+    gpio0_activity_init();
+    power_manager_init();
+
+    lv_indev_t *touch_indev = bsp_get_touch_indev();
+    if (touch_indev) {
+      lv_indev_add_event_cb(touch_indev, touch_indev_event_cb,
+                            LV_EVENT_PRESSING, NULL);
+      ESP_LOGI(TAG, "Touch indev activity callback registered");
+    }
+
     esp_bt_controller_mem_release(ESP_BT_MODE_CLASSIC_BT);
 
     ESP_LOGI(TAG, "Booting into NORMAL mode");
@@ -366,15 +418,17 @@ void app_main(void) {
     init_mdns("esp32-s3");
     vTaskDelay(pdMS_TO_TICKS(1000));
     query_mdns_host("aobara-pc");
-
-    bsp_camera_init();
+    ESP_ERROR_CHECK(http_ping_server());
     face_detector_helper_init(320, 240);
 
+    cam_helper_acquire();
     if (face_detector_helper_trigger_detection(1000)) {
       ESP_LOGI(TAG, "detected facesd");
     } else {
       ESP_LOGI(TAG, "undetected facesd");
     }
+    cam_helper_release();
+
     // 启动s3服务
     uploader_task_start();
 

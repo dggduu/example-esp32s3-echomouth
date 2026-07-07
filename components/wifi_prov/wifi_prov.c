@@ -253,16 +253,16 @@ void wifi_prov_reset_state() {
 
 void wifi_prov_nvs_init() {
   /* Initialize NVS partition */
-  // esp_err_t ret = nvs_flash_init();
-  // if (ret == ESP_ERR_NVS_NO_FREE_PAGES ||
-  //     ret == ESP_ERR_NVS_NEW_VERSION_FOUND) {
-  //   /* NVS partition was truncated
-  //    * and needs to be erased */
-  //   ESP_ERROR_CHECK(nvs_flash_erase());
+  esp_err_t ret = nvs_flash_init();
+  if (ret == ESP_ERR_NVS_NO_FREE_PAGES ||
+      ret == ESP_ERR_NVS_NEW_VERSION_FOUND) {
+    /* NVS partition was truncated
+     * and needs to be erased */
+    ESP_ERROR_CHECK(nvs_flash_erase());
 
-  //   /* Retry nvs_flash_init */
-  //   ESP_ERROR_CHECK(nvs_flash_init());
-  // }
+    /* Retry nvs_flash_init */
+    ESP_ERROR_CHECK(nvs_flash_init());
+  }
 
   /* Initialize TCP/IP */
   ESP_ERROR_CHECK(esp_netif_init());
@@ -317,36 +317,43 @@ static void provisioning_task(void *arg) {
     char service_name[12];
     get_device_service_name(service_name, sizeof(service_name));
 
-    wifi_prov_security_t security = WIFI_PROV_SECURITY_2;
-    const char *username = EXAMPLE_PROV_SEC2_USERNAME;
-    const char *pop = EXAMPLE_PROV_SEC2_PWD;
+    // wifi_prov_security_t security = WIFI_PROV_SECURITY_2;
+    // const char *username = EXAMPLE_PROV_SEC2_USERNAME;
+    // const char *pop = EXAMPLE_PROV_SEC2_PWD;
 
-    // 获取 salt/verifier
-    wifi_prov_security2_params_t sec2_params = {};
+    // // 获取 salt/verifier
+    // wifi_prov_security2_params_t sec2_params = {};
+    // ESP_ERROR_CHECK(
+    //     example_get_sec2_salt(&sec2_params.salt, &sec2_params.salt_len));
+    // ESP_ERROR_CHECK(example_get_sec2_verifier(&sec2_params.verifier,
+    //                                           &sec2_params.verifier_len));
+
+    // // 自定义 UUID
+    // uint8_t custom_service_uuid[] = {
+    //     0xb4, 0xdf, 0x5a, 0x1c, 0x3f, 0x6b, 0xf4, 0xbf,
+    //     0xea, 0x4a, 0x82, 0x03, 0x04, 0x90, 0x1a, 0x02,
+    // };
+    // wifi_prov_scheme_ble_set_service_uuid(custom_service_uuid);
+
+    // // 创建自定义 endpoint
+    // wifi_prov_mgr_endpoint_create("custom-data");
+
+    // // 启动 provisioning
+    // ESP_ERROR_CHECK(wifi_prov_mgr_start_provisioning(
+    //     security, (const void *)&sec2_params, service_name, NULL));
+
+    wifi_prov_security_t security = WIFI_PROV_SECURITY_1;
+
+    const char *pop = "abcd1234";
+
     ESP_ERROR_CHECK(
-        example_get_sec2_salt(&sec2_params.salt, &sec2_params.salt_len));
-    ESP_ERROR_CHECK(example_get_sec2_verifier(&sec2_params.verifier,
-                                              &sec2_params.verifier_len));
+        wifi_prov_mgr_start_provisioning(security, pop, service_name, NULL));
 
-    // 自定义 UUID
-    uint8_t custom_service_uuid[] = {
-        0xb4, 0xdf, 0x5a, 0x1c, 0x3f, 0x6b, 0xf4, 0xbf,
-        0xea, 0x4a, 0x82, 0x03, 0x04, 0x90, 0x1a, 0x02,
-    };
-    wifi_prov_scheme_ble_set_service_uuid(custom_service_uuid);
-
-    // 创建自定义 endpoint
-    wifi_prov_mgr_endpoint_create("custom-data");
-
-    // 启动 provisioning
-    ESP_ERROR_CHECK(wifi_prov_mgr_start_provisioning(
-        security, (const void *)&sec2_params, service_name, NULL));
-
-    wifi_prov_mgr_endpoint_register("custom-data", custom_prov_data_handler,
-                                    NULL);
+    // wifi_prov_mgr_endpoint_register("custom-data", custom_prov_data_handler,
+    //                                 NULL);
 
     // 异步显示二维码
-    wifi_prov_print_qr(service_name, username, pop, PROV_TRANSPORT_BLE);
+    wifi_prov_print_qr(service_name, service_name, pop, PROV_TRANSPORT_BLE);
 
     xEventGroupWaitBits(wifi_event_group, WIFI_CONNECTED_EVENT, true, true,
                         portMAX_DELAY);

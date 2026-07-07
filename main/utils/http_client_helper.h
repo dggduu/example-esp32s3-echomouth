@@ -22,6 +22,8 @@ bool http_put_binary(const char *url, uint8_t *data, int len);
 
 bool get_mdns_server_ip(char *ip_buf, size_t buf_len);
 
+bool http_ping_server(void);
+
 #ifdef __cplusplus
 }
 #endif

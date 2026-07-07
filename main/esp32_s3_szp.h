@@ -185,12 +185,16 @@ esp_err_t bsp_littlefs_mount(void);
 #define GPIO_PWR_CTRL (GPIO_NUM_NC)
 
 esp_err_t bsp_codec_init(void);
+esp_err_t bsp_codec_deinit(void);
 esp_err_t bsp_i2s_write(void *audio_buffer, size_t len, size_t *bytes_written,
                         uint32_t timeout_ms);
 esp_err_t bsp_codec_set_fs(uint32_t rate, uint32_t bits_cfg,
                            i2s_slot_mode_t ch);
 esp_err_t bsp_codec_mute_set(bool enable);
 esp_err_t bsp_codec_volume_set(int volume, int *volume_set);
+
+esp_lcd_touch_handle_t bsp_get_touch_handle(void);
+lv_indev_t *bsp_get_touch_indev(void);
 
 /*********************    音频 ↑   *************************/
 /***********************************************************/
