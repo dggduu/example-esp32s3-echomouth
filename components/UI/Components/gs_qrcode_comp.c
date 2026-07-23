@@ -57,7 +57,7 @@ lv_obj_t *gs_qrcode_comp_create(lv_obj_t *parent, const gs_qr_config_t *cfg) {
   lv_obj_set_width(s_qr->label, LV_PCT(50));
   lv_label_set_text(s_qr->label, cfg->hint_text);
   lv_obj_set_style_text_align(s_qr->label, LV_TEXT_ALIGN_CENTER, 0);
-  lv_obj_align(s_qr->label, LV_ALIGN_BOTTOM_MID, 0, -30);
+  lv_obj_align(s_qr->label, LV_ALIGN_BOTTOM_MID, 0, -50);
 
   return s_qr->root;
 }

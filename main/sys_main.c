@@ -73,6 +73,7 @@ static void ota_button_init(void) {
       .gpio_num = OTA_ENRTY_BUTTON_GPIO,
       .active_level = 0,
       .enable_power_save = false,
+      .disable_pull = 0,
   };
 
   esp_err_t ret = iot_button_new_gpio_device(&btn_cfg, &btn_gpio_cfg, &btn);
@@ -90,7 +91,7 @@ static boot_mode_t detect_boot_mode(void) {
 
   ota_button_init();
 
-  for (int i = 0; i < 100; i++) {
+  for (int i = 0; i < 300; i++) {
     if (s_boot_mode == BOOT_MODE_OTA) {
       break;
     }
