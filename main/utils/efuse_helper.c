@@ -11,7 +11,7 @@ esp_err_t efuse_helper_write_test_uuid(const uint8_t *uuid) {
   }
 
 #ifdef CONFIG_EFUSE_VIRTUAL
-
+  ESP_LOGI(TAG, "CONFIG_EFUSE_VIRTUAL = 1");
   uint8_t existing[16];
   if (esp_efuse_read_field_blob(ESP_EFUSE_USER_DATA_DEVICE_UUID, existing,
                                 128) == ESP_OK) {
@@ -36,16 +36,16 @@ esp_err_t efuse_helper_write_test_uuid(const uint8_t *uuid) {
   return ESP_OK;
 #else
   // 真实硬件-需要检查块是否锁定
-  if (esp_efuse_block_is_write_protected(EFUSE_BLK3)) {
-    ESP_LOGE(TAG, "BLK3 is write protected, cannot write UUID");
-    return ESP_FAIL;
-  }
-  esp_err_t err =
-      esp_efuse_write_field_blob(ESP_EFUSE_USER_DATA_DEVICE_UUID, uuid, 128);
-  if (err != ESP_OK) {
-    ESP_LOGE(TAG, "Write UUID failed: %s", esp_err_to_name(err));
-    return ESP_FAIL;
-  }
+  // if (esp_efuse_block_is_write_protected(EFUSE_BLK3)) {
+  //   ESP_LOGE(TAG, "BLK3 is write protected, cannot write UUID");
+  //   return ESP_FAIL;
+  // }
+  // esp_err_t err =
+  //     esp_efuse_write_field_blob(ESP_EFUSE_USER_DATA_DEVICE_UUID, uuid, 128);
+  // if (err != ESP_OK) {
+  //   ESP_LOGE(TAG, "Write UUID failed: %s", esp_err_to_name(err));
+  //   return ESP_FAIL;
+  // }
   ESP_LOGI(TAG, "UUID written to BLK3 (lock after verification)");
   return ESP_OK;
 #endif

@@ -1,3 +1,4 @@
+#include "StyleSheet.h"
 #include "esp_log.h"
 #include "esp_lvgl_port.h"
 #include "gs_nav.h"
@@ -13,39 +14,47 @@
 
 static page_todo_ctx_t s_ctx;
 
-LV_FONT_DECLARE(chinese_font_14px);
+LV_FONT_DECLARE(chili_cn);
 
 static lv_color_t get_status_color(const char *status) {
   if (strcmp(status, "active") == 0)
-    return lv_color_hex(0xECF5FF);
+    return S_COLOR_PRIMARY_CONTAINER;
   if (strcmp(status, "completed") == 0)
-    return lv_color_hex(0xF0F9EB);
+    return lv_color_hex(0xE8F5E9);
   if (strcmp(status, "pending_review") == 0)
-    return lv_color_hex(0xFDF6EC);
+    return lv_color_hex(0xFFF3E0);
   if (strcmp(status, "rejected") == 0)
-    return lv_color_hex(0xFEF0F0);
+    return S_COLOR_ERROR_CONTAINER;
   if (strcmp(status, "pending") == 0)
-    return lv_color_hex(0xF4F4F5);
-  return lv_color_hex(0xF4F4F5);
+    return S_COLOR_SURFACE_LOW;
+  return S_COLOR_SURFACE_LOW;
 }
 
 static lv_color_t get_status_text_color(const char *status) {
   if (strcmp(status, "active") == 0)
-    return lv_color_hex(0x409EFF);
+    return S_COLOR_ON_PRIMARY_CONTAINER;
   if (strcmp(status, "completed") == 0)
-    return lv_color_hex(0x67C23A);
+    return lv_color_hex(0x2E7D32);
   if (strcmp(status, "pending_review") == 0)
-    return lv_color_hex(0xE6A23C);
+    return lv_color_hex(0xE65100);
   if (strcmp(status, "rejected") == 0)
-    return lv_color_hex(0xF56C6C);
+    return S_COLOR_ERROR;
   if (strcmp(status, "pending") == 0)
-    return lv_color_hex(0x909399);
-  return lv_color_hex(0x909399);
+    return S_TEXT_SECONDARY;
+  return S_TEXT_SECONDARY;
+}
+
+static lv_color_t get_status_btn_color(const char *status) {
+  if (strcmp(status, "active") == 0)
+    return lv_color_hex(0x4CAF50);
+  if (strcmp(status, "rejected") == 0)
+    return S_COLOR_ERROR;
+  return S_COLOR_PRIMARY;
 }
 
 static void format_deadline(int64_t ms, char *buffer, size_t buf_size) {
   if (ms <= 0) {
-    snprintf(buffer, buf_size, "无截止");
+    snprintf(buffer, buf_size, "No deadline");
     return;
   }
   time_t seconds = ms / 1000;
@@ -62,10 +71,10 @@ static void on_start_click(lv_event_t *e) {
   const char *title = s_ctx.tasks[index].title;
 
   if (task_manager_start(task_id, title)) {
-    gs_toast_show("任务开始", GS_TOAST_SUCCESS);
+    gs_toast_show("Task started", GS_TOAST_SUCCESS);
     load_and_render();
   } else {
-    gs_toast_show("请先完成当前任务", GS_TOAST_FAILED);
+    gs_toast_show("Complete current task first", GS_TOAST_FAILED);
   }
 }
 
@@ -83,13 +92,12 @@ static void on_complete_click(lv_event_t *e) {
     args->device_id = s_ctx.deviceId;
     gs_nav_push(&page_cam, args);
   } else {
-    ESP_LOGE(TAG, "Failed to allocate memory for cam page args");
-    gs_toast_show("内存不足", GS_TOAST_FAILED);
+    gs_toast_show("Out of memory", GS_TOAST_FAILED);
   }
 }
 
 static void update_pagination_ui(page_todo_ctx_t *ctx) {
-  lv_label_set_text_fmt(ctx->lbl_page, "Page\n%d", ctx->page + 1);
+  lv_label_set_text_fmt(ctx->lbl_page, "%d", ctx->page + 1);
   if (ctx->page > 0)
     lv_obj_clear_flag(ctx->btn_prev, LV_OBJ_FLAG_HIDDEN);
   else
@@ -99,6 +107,7 @@ static void update_pagination_ui(page_todo_ctx_t *ctx) {
   else
     lv_obj_add_flag(ctx->btn_next, LV_OBJ_FLAG_HIDDEN);
 }
+
 static void render_list(page_todo_ctx_t *ctx) {
   lv_obj_clean(ctx->main_cont);
 
@@ -110,84 +119,62 @@ static void render_list(page_todo_ctx_t *ctx) {
     lv_obj_set_height(card, LV_SIZE_CONTENT);
     lv_obj_set_flex_flow(card, LV_FLEX_FLOW_COLUMN);
     lv_obj_set_style_bg_color(card, get_status_color(item->status), 0);
-    lv_obj_set_style_radius(card, 8, 0);
+    lv_obj_set_style_radius(card, S_RADIUS_CARD, 0);
     lv_obj_set_style_border_width(card, 0, 0);
-    lv_obj_set_style_pad_all(card, 10, 0);
+    lv_obj_set_style_pad_all(card, 12, 0);
 
-    lv_obj_t *header = lv_obj_create(card);
-    lv_obj_set_size(header, LV_PCT(100), LV_SIZE_CONTENT);
-    lv_obj_set_flex_flow(header, LV_FLEX_FLOW_ROW);
-    lv_obj_set_flex_align(header, LV_FLEX_ALIGN_SPACE_BETWEEN,
-                          LV_FLEX_ALIGN_CENTER, LV_FLEX_ALIGN_CENTER);
-    lv_obj_set_style_bg_opa(header, 0, 0);
-    lv_obj_set_style_border_width(header, 0, 0);
-    lv_obj_set_style_pad_all(header, 0, 0);
-
-    lv_obj_t *lbl_title = lv_label_create(header);
+    /* header: title */
+    lv_obj_t *lbl_title = lv_label_create(card);
     lv_label_set_text(lbl_title, item->title);
-    lv_obj_set_style_text_font(lbl_title, &chinese_font_14px, 0);
+    lv_obj_set_style_text_font(lbl_title, &chili_cn, 0);
+    lv_obj_set_style_text_color(lbl_title, S_TEXT_PRIMARY, 0);
 
-    lv_obj_t *info_line = lv_obj_create(card);
-    lv_obj_set_size(info_line, LV_PCT(100), LV_SIZE_CONTENT);
-    lv_obj_set_flex_flow(info_line, LV_FLEX_FLOW_ROW);
-    lv_obj_set_flex_align(info_line, LV_FLEX_ALIGN_SPACE_BETWEEN,
-                          LV_FLEX_ALIGN_CENTER, LV_FLEX_ALIGN_CENTER);
-    lv_obj_set_style_bg_opa(info_line, 0, 0);
-    lv_obj_set_style_border_width(info_line, 0, 0);
-    lv_obj_set_style_pad_top(info_line, 5, 0);
-
+    /* info line */
     char deadline_str[32];
     format_deadline(item->deadline, deadline_str, sizeof(deadline_str));
-    lv_obj_t *lbl_deadline = lv_label_create(info_line);
-    lv_label_set_text_fmt(lbl_deadline, "截止时间:%s", deadline_str);
-    lv_obj_set_style_text_color(lbl_deadline, lv_color_hex(0x909399), 0);
+    lv_obj_t *lbl_deadline = lv_label_create(card);
+    lv_label_set_text_fmt(lbl_deadline, "Deadline: %s", deadline_str);
+    lv_obj_set_style_text_color(lbl_deadline, S_TEXT_SECONDARY, 0);
+    lv_obj_set_style_margin_top(lbl_deadline, 4, 0);
 
-    lv_obj_t *lbl_likes = lv_label_create(info_line);
-    if (item->likes > 0) {
-      lv_label_set_text(lbl_likes, "已赞");
-      lv_obj_set_style_text_color(lbl_likes, lv_color_hex(0xF56C6C), 0);
+    /* action button */
+    if (strcmp(item->status, "pending") == 0 ||
+        strcmp(item->status, "active") == 0 ||
+        strcmp(item->status, "rejected") == 0) {
+
+      lv_obj_t *btn = lv_btn_create(card);
+      lv_obj_set_style_radius(btn, S_RADIUS_BTN, 0);
+      lv_obj_set_style_bg_color(btn, get_status_btn_color(item->status), 0);
+      lv_obj_set_style_border_width(btn, 0, 0);
+      lv_obj_set_style_pad_hor(btn, 20, 0);
+      lv_obj_set_style_pad_ver(btn, 6, 0);
+      lv_obj_set_style_margin_top(btn, 8, 0);
+
+      lv_obj_t *btn_lbl = lv_label_create(btn);
+      lv_obj_set_style_text_color(btn_lbl, S_TEXT_ON_DARK, 0);
+
+      if (strcmp(item->status, "pending") == 0) {
+        lv_label_set_text(btn_lbl, "Start");
+        lv_obj_add_event_cb(btn, on_start_click, LV_EVENT_CLICKED,
+                            (void *)(intptr_t)i);
+      } else if (strcmp(item->status, "active") == 0) {
+        lv_label_set_text(btn_lbl, "Submit");
+        lv_obj_add_event_cb(btn, on_complete_click, LV_EVENT_CLICKED,
+                            (void *)(intptr_t)i);
+      } else if (strcmp(item->status, "rejected") == 0) {
+        lv_label_set_text(btn_lbl, "Resubmit");
+        lv_obj_add_event_cb(btn, on_complete_click, LV_EVENT_CLICKED,
+                            (void *)(intptr_t)i);
+      }
     } else {
-
-      lv_obj_add_flag(lbl_likes, LV_OBJ_FLAG_HIDDEN);
-    }
-
-    lv_obj_t *btn_area = lv_obj_create(card);
-    lv_obj_set_size(btn_area, LV_PCT(100), LV_SIZE_CONTENT);
-    lv_obj_set_flex_flow(btn_area, LV_FLEX_FLOW_ROW);
-    lv_obj_set_flex_align(btn_area, LV_FLEX_ALIGN_END, LV_FLEX_ALIGN_CENTER,
-                          LV_FLEX_ALIGN_CENTER);
-    lv_obj_set_style_bg_opa(btn_area, 0, 0);
-    lv_obj_set_style_border_width(btn_area, 0, 0);
-    lv_obj_set_style_pad_all(btn_area, 0, 0);
-
-    if (strcmp(item->status, "pending") == 0) {
-      lv_obj_t *btn = lv_btn_create(btn_area);
-      lv_obj_set_style_bg_color(btn, lv_color_hex(0x409EFF), 0);
-      lv_label_set_text(lv_label_create(btn), "开始任务");
-      lv_obj_add_event_cb(btn, on_start_click, LV_EVENT_CLICKED,
-                          (void *)(intptr_t)i);
-    } else if (strcmp(item->status, "active") == 0) {
-      lv_obj_t *btn = lv_btn_create(btn_area);
-      lv_obj_set_style_bg_color(btn, lv_color_hex(0x67C23A), 0);
-      lv_label_set_text(lv_label_create(btn), "提交报告");
-      lv_obj_add_event_cb(btn, on_complete_click, LV_EVENT_CLICKED,
-                          (void *)(intptr_t)i);
-    } else if (strcmp(item->status, "pending_review") == 0) {
-      lv_obj_t *btn = lv_btn_create(btn_area);
-      lv_obj_set_style_bg_color(btn, lv_color_hex(0xE6A23C), 0);
-      lv_obj_add_state(btn, LV_STATE_DISABLED);
-      lv_label_set_text(lv_label_create(btn), "等待审阅");
-    } else if (strcmp(item->status, "rejected") == 0) {
-      lv_obj_t *btn = lv_btn_create(btn_area);
-      lv_obj_set_style_bg_color(btn, lv_color_hex(0xF56C6C), 0);
-      lv_label_set_text(lv_label_create(btn), "重新提交");
-      lv_obj_add_event_cb(btn, on_complete_click, LV_EVENT_CLICKED,
-                          (void *)(intptr_t)i);
-    } else if (strcmp(item->status, "completed") == 0) {
-      lv_obj_t *btn = lv_btn_create(btn_area);
-      lv_obj_set_style_bg_color(btn, lv_color_hex(0x67C23A), 0);
-      lv_label_set_text(lv_label_create(btn), "已完成");
-      lv_obj_add_state(btn, LV_STATE_DISABLED);
+      /* read-only status badge */
+      lv_obj_t *badge = lv_label_create(card);
+      const char *txt =
+          strcmp(item->status, "completed") == 0 ? "Done" : "Reviewing";
+      lv_label_set_text(badge, txt);
+      lv_obj_set_style_text_color(badge, get_status_text_color(item->status),
+                                  0);
+      lv_obj_set_style_margin_top(badge, 8, 0);
     }
   }
   update_pagination_ui(ctx);
@@ -236,51 +223,59 @@ static lv_obj_t *page_todo_render(lv_obj_t *parent, void *ctx_ptr) {
   lv_obj_set_size(root, LV_PCT(100), LV_PCT(100));
   lv_obj_set_flex_flow(root, LV_FLEX_FLOW_ROW);
   lv_obj_set_style_pad_all(root, 0, 0);
+  lv_obj_set_style_bg_opa(root, LV_OPA_TRANSP, 0);
 
+  /* sidebar */
   lv_obj_t *side = lv_obj_create(root);
-  lv_obj_set_size(side, 80, LV_PCT(100));
+  lv_obj_set_size(side, 56, LV_PCT(100));
   lv_obj_set_flex_flow(side, LV_FLEX_FLOW_COLUMN);
   lv_obj_set_flex_align(side, LV_FLEX_ALIGN_SPACE_BETWEEN, LV_FLEX_ALIGN_CENTER,
                         LV_FLEX_ALIGN_CENTER);
-  lv_obj_set_style_bg_color(side, lv_color_hex(0x2C3E50), 0);
+  lv_obj_set_style_bg_color(side, S_COLOR_SURFACE_MID, 0);
   lv_obj_set_style_radius(side, 0, 0);
   lv_obj_set_style_border_width(side, 0, 0);
+  lv_obj_set_style_pad_ver(side, S_PAD_H, 0);
 
   lv_obj_t *back = lv_btn_create(side);
+  lv_obj_set_style_radius(back, S_RADIUS_BTN, 0);
+  lv_obj_set_style_bg_opa(back, LV_OPA_TRANSP, 0);
+  lv_obj_set_style_border_width(back, 0, 0);
   lv_obj_t *back_label = lv_label_create(back);
   lv_label_set_text(back_label, LV_SYMBOL_LEFT);
-  lv_obj_center(back_label);
+  lv_obj_set_style_text_color(back_label, S_TEXT_PRIMARY, 0);
   lv_obj_add_event_cb(back, btn_back_event, LV_EVENT_CLICKED, NULL);
 
-  lv_obj_t *ctrls = lv_obj_create(side);
-  lv_obj_set_width(ctrls, LV_PCT(100));
-  lv_obj_set_flex_flow(ctrls, LV_FLEX_FLOW_COLUMN);
-  lv_obj_set_style_bg_opa(ctrls, 0, 0);
-  lv_obj_set_style_border_width(ctrls, 0, 0);
-
-  ctx->btn_prev = lv_btn_create(ctrls);
+  ctx->btn_prev = lv_btn_create(side);
+  lv_obj_set_style_radius(ctx->btn_prev, S_RADIUS_BTN, 0);
+  lv_obj_set_style_bg_opa(ctx->btn_prev, LV_OPA_TRANSP, 0);
+  lv_obj_set_style_border_width(ctx->btn_prev, 0, 0);
   lv_obj_t *prev_label = lv_label_create(ctx->btn_prev);
   lv_label_set_text(prev_label, LV_SYMBOL_PREV);
-  lv_obj_center(prev_label);
+  lv_obj_set_style_text_color(prev_label, S_TEXT_PRIMARY, 0);
   lv_obj_add_event_cb(ctx->btn_prev, btn_prev_event, LV_EVENT_CLICKED, NULL);
 
-  ctx->lbl_page = lv_label_create(ctrls);
-  lv_obj_set_style_text_color(ctx->lbl_page, lv_color_white(), 0);
+  ctx->lbl_page = lv_label_create(side);
+  lv_obj_set_style_text_color(ctx->lbl_page, S_TEXT_PRIMARY, 0);
   lv_obj_set_style_text_align(ctx->lbl_page, LV_TEXT_ALIGN_CENTER, 0);
 
-  ctx->btn_next = lv_btn_create(ctrls);
+  ctx->btn_next = lv_btn_create(side);
+  lv_obj_set_style_radius(ctx->btn_next, S_RADIUS_BTN, 0);
+  lv_obj_set_style_bg_opa(ctx->btn_next, LV_OPA_TRANSP, 0);
+  lv_obj_set_style_border_width(ctx->btn_next, 0, 0);
   lv_obj_t *next_label = lv_label_create(ctx->btn_next);
   lv_label_set_text(next_label, LV_SYMBOL_NEXT);
-  lv_obj_center(next_label);
+  lv_obj_set_style_text_color(next_label, S_TEXT_PRIMARY, 0);
   lv_obj_add_event_cb(ctx->btn_next, btn_next_event, LV_EVENT_CLICKED, NULL);
 
+  /* content */
   ctx->main_cont = lv_obj_create(root);
   lv_obj_set_height(ctx->main_cont, LV_PCT(100));
   lv_obj_set_flex_grow(ctx->main_cont, 1);
   lv_obj_set_flex_flow(ctx->main_cont, LV_FLEX_FLOW_COLUMN);
-  lv_obj_set_style_bg_color(ctx->main_cont, lv_color_hex(0xF0F2F5), 0);
-  lv_obj_set_style_pad_all(ctx->main_cont, 10, 0);
+  lv_obj_set_style_bg_opa(ctx->main_cont, LV_OPA_TRANSP, 0);
+  lv_obj_set_style_pad_all(ctx->main_cont, S_PAD_H, 0);
   lv_obj_set_style_border_width(ctx->main_cont, 0, 0);
+  lv_obj_set_style_pad_gap(ctx->main_cont, S_GAP, 0);
 
   load_and_render();
   return root;

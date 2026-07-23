@@ -1,6 +1,9 @@
 #include "gs_qrcode_comp.h"
+#include "esp_log.h"
 #include "string.h"
-
+#include <stdlib.h>
+/* Only one QR component is active at a time (wifi provisioning screen).
+   Use a simple global pointer — the QR task runs serially. */
 static struct {
   lv_obj_t *root;
   lv_obj_t *qr_obj;
@@ -8,50 +11,70 @@ static struct {
   gs_qr_config_t cfg;
   gs_qr_status_t current_status;
   bool is_busy;
-} s_comp;
+} *s_qr = NULL;
 
 lv_obj_t *gs_qrcode_comp_create(lv_obj_t *parent, const gs_qr_config_t *cfg) {
   if (!parent || !cfg)
     return NULL;
 
-  s_comp.cfg = *cfg;
-  s_comp.current_status = GS_QR_WAITED;
-  s_comp.is_busy = false;
+  /* free previous if any */
+  if (s_qr) {
+    free(s_qr);
+    s_qr = NULL;
+  }
 
-  s_comp.root = lv_obj_create(parent);
-  lv_obj_set_size(s_comp.root, LV_PCT(100), LV_PCT(100));
-  lv_obj_set_style_bg_color(s_comp.root, lv_color_hex(0xffffff), 0);
-  lv_obj_set_style_border_width(s_comp.root, 0, 0);
-  lv_obj_set_style_pad_all(s_comp.root, 0, 0);
+  s_qr = calloc(1, sizeof(*s_qr));
+  if (!s_qr)
+    return NULL;
+  s_qr->cfg = *cfg;
+  s_qr->current_status = GS_QR_WAITED;
 
-  s_comp.qr_obj = lv_qrcode_create(s_comp.root);
-  lv_qrcode_set_size(s_comp.qr_obj, 145);
-  lv_qrcode_update(s_comp.qr_obj, cfg->qr_data, strlen(cfg->qr_data));
-  lv_obj_align(s_comp.qr_obj, LV_ALIGN_CENTER, 0, -20);
+  s_qr->root = lv_obj_create(parent);
+  lv_obj_set_size(s_qr->root, LV_PCT(100), LV_PCT(100));
+  lv_obj_set_style_bg_color(s_qr->root, lv_color_hex(0xffffff), 0);
+  lv_obj_set_style_border_width(s_qr->root, 0, 0);
+  lv_obj_set_style_pad_all(s_qr->root, 0, 0);
 
-  s_comp.label = lv_label_create(s_comp.root);
-  lv_obj_set_width(s_comp.label, LV_PCT(80));
-  lv_label_set_text(s_comp.label, cfg->hint_text);
-  lv_obj_set_style_text_align(s_comp.label, LV_TEXT_ALIGN_CENTER, 0);
-  lv_obj_align(s_comp.label, LV_ALIGN_BOTTOM_MID, 0, -30);
+  s_qr->qr_obj = lv_qrcode_create(s_qr->root);
 
-  return s_comp.root;
+  if (!s_qr->qr_obj) {
+    ESP_LOGE("QR", "create failed");
+    return NULL;
+  }
+
+  lv_qrcode_set_size(s_qr->qr_obj, 150);
+
+  lv_qrcode_set_dark_color(s_qr->qr_obj, lv_color_black());
+
+  lv_qrcode_set_light_color(s_qr->qr_obj, lv_color_white());
+
+  lv_qrcode_update(s_qr->qr_obj, cfg->qr_data, strlen(cfg->qr_data));
+
+  lv_obj_center(s_qr->qr_obj);
+  ESP_LOGI("QRCODE", "qr data:%s", cfg->qr_data);
+
+  s_qr->label = lv_label_create(s_qr->root);
+  lv_obj_set_width(s_qr->label, LV_PCT(50));
+  lv_label_set_text(s_qr->label, cfg->hint_text);
+  lv_obj_set_style_text_align(s_qr->label, LV_TEXT_ALIGN_CENTER, 0);
+  lv_obj_align(s_qr->label, LV_ALIGN_BOTTOM_MID, 0, -30);
+
+  return s_qr->root;
 }
 
 void gs_qrcode_comp_trigger(gs_qr_status_t status) {
-  if (!s_comp.root || s_comp.is_busy)
+  if (!s_qr || !s_qr->root || s_qr->is_busy)
     return;
 
-  // 状态重复检查
-  if (status == s_comp.current_status && status != GS_QR_WAITED)
+  if (status == s_qr->current_status && status != GS_QR_WAITED)
     return;
 
-  s_comp.is_busy = true;
-  s_comp.current_status = status;
+  s_qr->is_busy = true;
+  s_qr->current_status = status;
 
-  if (s_comp.cfg.on_status_changed) {
-    s_comp.cfg.on_status_changed(s_comp.root, s_comp.label, status);
+  if (s_qr->cfg.on_status_changed) {
+    s_qr->cfg.on_status_changed(s_qr->root, s_qr->label, status);
   }
 
-  s_comp.is_busy = false;
+  s_qr->is_busy = false;
 }

@@ -1,9 +1,10 @@
 #include "power_manager.h"
 #include "audio_helper.h"
+#include "bsp_lcd.h"
+#include "bsp_pca9539.h"
 #include "cam_helper.h"
 #include "driver/gpio.h"
 #include "driver/rtc_io.h"
-#include "esp32_s3_szp.h"
 #include "esp_log.h"
 #include "esp_pm.h"
 #include "esp_sleep.h"
@@ -74,7 +75,7 @@ static void cpu_freq_high(void) {
 /* ── Step 1: NORMAL → DIMMING  (backlight 60%) ── */
 static void enter_dim(void) {
   ESP_LOGI(TAG, "→ DIMMING (backlight 30%%, 10 s warning)");
-  bsp_display_brightness_set(30);
+  bsp_lcd_backlight_set(true);
   if (s_dim_timer)
     xTimerStart(s_dim_timer, 0);
 }
@@ -82,10 +83,10 @@ static void enter_dim(void) {
 /* ── Step 2: DIMMING → ECO  (backlight off, lower freq, PA off) ── */
 static void enter_eco(void) {
   ESP_LOGI(TAG, "→ ECO (backlight off, CPU freq min)");
-  bsp_display_brightness_set(0);
+  bsp_lcd_backlight_set(false);
   cpu_freq_low();
   if (!audio_helper_is_running())
-    pa_en(0);
+    bsp_pa_power_off();
   if (s_deep_sleep_timer)
     xTimerStart(s_deep_sleep_timer, 0);
 }
@@ -95,7 +96,7 @@ static void back_to_normal(void) {
   if (s_state == PWR_STATE_NORMAL)
     return;
   ESP_LOGI(TAG, "→ NORMAL (full brightness, max freq)");
-  bsp_display_brightness_set(100);
+  bsp_lcd_backlight_set(true);
   cpu_freq_high();
   s_state = PWR_STATE_NORMAL;
   if (s_dim_timer)
@@ -157,13 +158,18 @@ static void deep_sleep_timer_cb(TimerHandle_t timer) {
 
       load_ulp_program();
 
-      bsp_display_brightness_set(0);
-      rtc_gpio_deinit(GPIO_NUM_0);
-      rtc_gpio_set_direction(GPIO_NUM_0, RTC_GPIO_MODE_INPUT_ONLY);
-      rtc_gpio_pullup_en(GPIO_NUM_0);
+      /* Keep screen power ON so touch panel (CST816S) stays powered.
+       * Turn backlight OFF to save power.
+       * TP_INT on GPIO4 will pull LOW on touch → ULP wakes CPU. */
+      bsp_lcd_power_low();
+      bsp_lcd_backlight_set(false);
+
+      rtc_gpio_deinit(GPIO_NUM_4);
+      rtc_gpio_set_direction(GPIO_NUM_4, RTC_GPIO_MODE_INPUT_ONLY);
+      rtc_gpio_pullup_en(GPIO_NUM_4);
 
       ESP_ERROR_CHECK(esp_sleep_enable_ulp_wakeup());
-      ESP_LOGI(TAG, "Entering deep sleep, ULP monitoring GPIO0...");
+      ESP_LOGI(TAG, "Entering deep sleep, ULP monitoring TP_INT GPIO4...");
       esp_deep_sleep_start();
       return;
     }
@@ -250,10 +256,11 @@ void power_manager_enter_sleep(void) {
     pwr_unlock();
 
     load_ulp_program();
-    bsp_display_brightness_set(0);
-    rtc_gpio_deinit(GPIO_NUM_0);
-    rtc_gpio_set_direction(GPIO_NUM_0, RTC_GPIO_MODE_INPUT_ONLY);
-    rtc_gpio_pullup_en(GPIO_NUM_0);
+    bsp_lcd_power_low();
+    bsp_lcd_backlight_set(false);
+    rtc_gpio_deinit(GPIO_NUM_4);
+    rtc_gpio_set_direction(GPIO_NUM_4, RTC_GPIO_MODE_INPUT_ONLY);
+    rtc_gpio_pullup_en(GPIO_NUM_4);
     esp_sleep_enable_ulp_wakeup();
     esp_deep_sleep_start();
     return;

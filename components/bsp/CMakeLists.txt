@@ -1,0 +1,18 @@
+idf_component_register(
+    SRCS
+        bsp_board.c
+        bsp_i2c.c
+        bsp_pca9539.c
+        bsp_audio.c
+        bsp_lcd.c
+        bsp_camera.c
+    INCLUDE_DIRS "include"
+    REQUIRES
+        driver
+        esp_lcd_st77916
+        esp_lcd_touch_cst816s
+        esp_codec_dev
+        esp32-camera
+        esp_lvgl_port
+        lvgl
+)

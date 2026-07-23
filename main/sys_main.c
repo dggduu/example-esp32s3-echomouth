@@ -1,6 +1,12 @@
+#include "StyleSheet.h"
+#include "bsp_audio.h"
+#include "bsp_board.h"
+#include "bsp_camera.h"
+#include "bsp_config.h"
+#include "bsp_lcd.h"
+#include "bsp_pca9539.h"
 #include "cam_helper.h"
-#include "esp32_s3_szp.h"
-#include "esp_camera.h"
+#include "esp_littlefs.h"
 #include "esp_websocket_client.h"
 #include "gs_nav.h"
 #include "mdns.h"
@@ -32,7 +38,9 @@
 
 #include "time_test_helper.h"
 
-#define OTA_ENRTY_BUTTON_GPIO GPIO_NUM_0
+#include "esp_lvgl_port.h"
+
+#define OTA_ENRTY_BUTTON_GPIO GPIO_NUM_4
 
 static button_handle_t btn;
 static bool s_ota_mode_active = false;
@@ -82,7 +90,7 @@ static boot_mode_t detect_boot_mode(void) {
 
   ota_button_init();
 
-  for (int i = 0; i < 500; i++) {
+  for (int i = 0; i < 100; i++) {
     if (s_boot_mode == BOOT_MODE_OTA) {
       break;
     }
@@ -95,8 +103,9 @@ static boot_mode_t detect_boot_mode(void) {
 
 static lv_obj_t *splash_page(lv_obj_t *parent, void *ctx) {
   lv_obj_t *cont = lv_obj_create(parent);
-  lv_obj_set_size(cont, 320, 240);
+  lv_obj_set_size(cont, 360, 360);
   lv_obj_set_scrollbar_mode(cont, LV_SCROLLBAR_MODE_OFF);
+  lv_obj_set_style_bg_opa(cont, LV_OPA_TRANSP, 0);
   lv_obj_set_style_border_width(cont, 0, 0);
 
   lv_obj_t *spinner = lv_spinner_create(cont);
@@ -105,18 +114,20 @@ static lv_obj_t *splash_page(lv_obj_t *parent, void *ctx) {
   lv_obj_align(spinner, LV_ALIGN_CENTER, 0, -20);
   lv_obj_set_style_arc_width(spinner, 6, LV_PART_MAIN);
   lv_obj_set_style_arc_width(spinner, 6, LV_PART_INDICATOR);
-  lv_obj_set_style_arc_color(spinner, lv_color_hex(0x2195f6),
-                             LV_PART_INDICATOR);
+  lv_obj_set_style_arc_color(spinner, S_COLOR_PRIMARY, LV_PART_INDICATOR);
+  lv_obj_set_style_arc_color(spinner, S_COLOR_PRIMARY_CONTAINER, LV_PART_MAIN);
 
   lv_obj_t *label = lv_label_create(cont);
   lv_obj_t *label_version = lv_label_create(cont);
   char version[50];
-  snprintf(version, sizeof(version), "ver:%s", "0.1.1");
-  lv_label_set_text(label, "初始化中...");
+  snprintf(version, sizeof(version), "ver:%s", "0.1.0");
+  lv_label_set_text(label, "Initializing...");
   lv_label_set_text(label_version, version);
 
-  lv_obj_set_style_text_color(label, lv_color_hex(0x000000), 0);
+  lv_obj_set_style_text_color(label, S_TEXT_SECONDARY, 0);
   lv_obj_align(label, LV_ALIGN_CENTER, 0, 40);
+  lv_obj_set_style_text_color(label_version, S_COLOR_PRIMARY, 0);
+  lv_obj_align(label_version, LV_ALIGN_CENTER, 0, 55);
 
   return cont;
 }
@@ -148,7 +159,7 @@ static void on_notify_received(uint32_t msg_id, uint8_t sender,
   gs_portal_toast_show(cfg);
 }
 
-static volatile bool s_gpio0_activity = false;
+static volatile bool s_gpio_activity = false;
 
 static void touch_indev_event_cb(lv_event_t *e) {
   power_manager_report_activity();
@@ -160,8 +171,8 @@ void gui_flsuh_task(void *param) {
       uint32_t sleep_ms = lv_timer_handler();
       gs_nav_loop();
 
-      if (s_gpio0_activity) {
-        s_gpio0_activity = false;
+      if (s_gpio_activity) {
+        s_gpio_activity = false;
         power_manager_report_activity();
       }
 
@@ -178,11 +189,13 @@ void gui_flsuh_task(void *param) {
   }
 }
 
-static void IRAM_ATTR gpio0_isr_handler(void *arg) { s_gpio0_activity = true; }
+static void IRAM_ATTR gpio_activity_isr_handler(void *arg) {
+  s_gpio_activity = true;
+}
 
-static void gpio0_activity_init(void) {
+static void gpio_activity_init(void) {
   gpio_config_t io_conf = {
-      .pin_bit_mask = BIT64(GPIO_NUM_0),
+      .pin_bit_mask = BIT64(GPIO_NUM_4),
       .mode = GPIO_MODE_INPUT,
       .pull_up_en = GPIO_PULLUP_ENABLE,
       .pull_down_en = GPIO_PULLDOWN_DISABLE,
@@ -190,8 +203,8 @@ static void gpio0_activity_init(void) {
   };
   gpio_config(&io_conf);
   gpio_install_isr_service(0);
-  gpio_isr_handler_add(GPIO_NUM_0, gpio0_isr_handler, NULL);
-  ESP_LOGI(TAG, "GPIO0 activity ISR installed");
+  gpio_isr_handler_add(GPIO_NUM_4, gpio_activity_isr_handler, NULL);
+  ESP_LOGI(TAG, "GPIO4 activity ISR installed");
 }
 
 void init_mdns(const char *hostname) {
@@ -359,15 +372,27 @@ void efuse_init() {
 void app_main(void) {
   if (power_manager_is_deep_sleep_wakeup()) {
     ESP_LOGI(TAG, "=== Resuming from ULP deep sleep ===");
-    /* Skip ULP reload — it is still in RTC memory.
-     * Just restore the display and resume normal operation. */
   }
 
-  bsp_i2c_init();
-  pca9557_init();
-  bsp_lvgl_start();
+  bsp_board_init();
+  esp_lcd_panel_handle_t lcd_panel;
+  esp_lcd_touch_handle_t touch_handle;
+  bsp_lcd_power_up();
+  bsp_lcd_init(&lcd_panel, &touch_handle);
+  bsp_lvgl_init(lcd_panel, touch_handle);
   my_ui_theme_init();
-  bsp_littlefs_mount();
+
+  {
+    esp_vfs_littlefs_conf_t conf = {
+        .base_path = "/littlefs",
+        .partition_label = "storage",
+        .format_if_mount_failed = false,
+    };
+    ESP_ERROR_CHECK(esp_vfs_littlefs_register(&conf));
+    size_t total = 0, used = 0;
+    esp_littlefs_info(conf.partition_label, &total, &used);
+    ESP_LOGI(TAG, "LittleFS mounted: total=%d, used=%d", total, used);
+  }
 
   nvs_helper_init();
   efuse_init();
@@ -378,7 +403,6 @@ void app_main(void) {
   lv_obj_t *container = lv_scr_act();
   gs_nav_init(container);
 
-  xTaskCreate(gui_flsuh_task, "gui", 8 * 1024, NULL, 4, NULL);
   gui_task_regsiter();
   gs_nav_push(&page_splash, NULL);
   boot_mode_t mode = detect_boot_mode();
@@ -389,10 +413,10 @@ void app_main(void) {
     gs_nav_push(&page_ota, NULL);
     return;
   } else {
-    gpio0_activity_init();
+    gpio_activity_init();
     power_manager_init();
 
-    lv_indev_t *touch_indev = bsp_get_touch_indev();
+    lv_indev_t *touch_indev = bsp_lcd_get_touch_indev();
     if (touch_indev) {
       lv_indev_add_event_cb(touch_indev, touch_indev_event_cb,
                             LV_EVENT_PRESSING, NULL);
@@ -402,8 +426,9 @@ void app_main(void) {
     esp_bt_controller_mem_release(ESP_BT_MODE_CLASSIC_BT);
 
     ESP_LOGI(TAG, "Booting into NORMAL mode");
-    // bsp_codec_init();
+    printf("internal=%d\n", heap_caps_get_free_size(MALLOC_CAP_INTERNAL));
 
+    printf("dma=%d\n", heap_caps_get_free_size(MALLOC_CAP_DMA));
     wifi_prov_init();
 
     xEventGroupWaitBits(wifi_event_group, WIFI_CONNECTED_EVENT, true, true,

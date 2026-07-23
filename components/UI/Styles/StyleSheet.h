@@ -1,55 +1,81 @@
-// AI辅助生成：DeepSeek, 2026-04-18
+/*
+ * Material You Light Theme — StyleSheet
+ * 360x360 circular display
+ */
 
-#ifndef DARK_HIGH_CONTRAST_COLORS_H
-#define DARK_HIGH_CONTRAST_COLORS_H
+#ifndef STYLESHEET_H
+#define STYLESHEET_H
 
 #include "lvgl.h"
 
-/* ========== 核心颜色 ========== */
-#define DHC_PRIMARY lv_color_hex(0xDAFBB0)           // primary
-#define DHC_ON_PRIMARY lv_color_hex(0x000000)        // onPrimary
-#define DHC_PRIMARY_CONTAINER lv_color_hex(0xADCD86) // primaryContainer
-#define DHC_ON_PRIMARY_CONTAINER lv_color_hex(0x050E00)
+/* ═══════════════════════════════════════════
+   Primary (seed: #6750A4 purple-blue)
+   ═══════════════════════════════════════════ */
+#define S_COLOR_PRIMARY lv_color_hex(0x6750A4)
+#define S_COLOR_ON_PRIMARY lv_color_hex(0xFFFFFF)
+#define S_COLOR_PRIMARY_CONTAINER lv_color_hex(0xEADDFF)
+#define S_COLOR_ON_PRIMARY_CONTAINER lv_color_hex(0x21005D)
 
-#define DHC_SECONDARY lv_color_hex(0xE9F4D5)
-#define DHC_ON_SECONDARY lv_color_hex(0x000000)
-#define DHC_SECONDARY_CONTAINER lv_color_hex(0xBCC7A9)
-#define DHC_ON_SECONDARY_CONTAINER lv_color_hex(0x060D01)
+/* ═══════════════════════════════════════════
+   Secondary
+   ═══════════════════════════════════════════ */
+#define S_COLOR_SECONDARY lv_color_hex(0x625B71)
+#define S_COLOR_ON_SECONDARY lv_color_hex(0xFFFFFF)
+#define S_COLOR_SECONDARY_CONTAINER lv_color_hex(0xE8DEF8)
+#define S_COLOR_ON_SECONDARY_CONTAINER lv_color_hex(0x1D192B)
 
-#define DHC_TERTIARY lv_color_hex(0xC9F9F5)
-#define DHC_ON_TERTIARY lv_color_hex(0x000000)
-#define DHC_TERTIARY_CONTAINER lv_color_hex(0x9CCCC7)
-#define DHC_ON_TERTIARY_CONTAINER lv_color_hex(0x000E0D)
+/* ═══════════════════════════════════════════
+   Surface (elevation-based backgrounds)
+   ═══════════════════════════════════════════ */
+#define S_COLOR_BACKGROUND lv_color_hex(0xFFFBFE)
+#define S_COLOR_ON_BACKGROUND lv_color_hex(0x1C1B1F)
+#define S_COLOR_SURFACE lv_color_hex(0xFFFBFE)
+#define S_COLOR_ON_SURFACE lv_color_hex(0x1C1B1F)
+#define S_COLOR_SURFACE_VARIANT lv_color_hex(0xE7E0EC)
+#define S_COLOR_ON_SURFACE_VARIANT lv_color_hex(0x49454F)
 
-/* ========== 背景与表面 ========== */
-#define DHC_BACKGROUND lv_color_hex(0x12140E)    // background
-#define DHC_ON_BACKGROUND lv_color_hex(0xE2E3D8) // onBackground
-#define DHC_SURFACE lv_color_hex(0x12140E)       // surface
-#define DHC_ON_SURFACE lv_color_hex(0xFFFFFF)    // onSurface (纯白)
-#define DHC_SURFACE_VARIANT lv_color_hex(0x44483D)
-#define DHC_ON_SURFACE_VARIANT lv_color_hex(0xFFFFFF)
+#define S_COLOR_SURFACE_CONTAINER lv_color_hex(0xF3EDF7)
+#define S_COLOR_SURFACE_CONTAINER_HIGH lv_color_hex(0xECE6F0)
 
-/* ========== 状态与边框 ========== */
-#define DHC_ERROR lv_color_hex(0xFFECE9)
-#define DHC_ON_ERROR lv_color_hex(0x000000)
-#define DHC_ERROR_CONTAINER lv_color_hex(0xFFAEA4)
-#define DHC_ON_ERROR_CONTAINER lv_color_hex(0x220001)
+/* elevation layers */
+#define S_COLOR_SURFACE_LOWEST lv_color_hex(0xF7F2FA)
+#define S_COLOR_SURFACE_LOW lv_color_hex(0xF3EDF7)
+#define S_COLOR_SURFACE_MID lv_color_hex(0xECE6F0)
+#define S_COLOR_SURFACE_HIGH lv_color_hex(0xE6E0E9)
+#define S_COLOR_SURFACE_HIGHEST lv_color_hex(0xE0DAE3)
 
-#define DHC_OUTLINE lv_color_hex(0xEEF2E2)
-#define DHC_OUTLINE_VARIANT lv_color_hex(0xC1C4B6)
+/* ═══════════════════════════════════════════
+   Outline
+   ═══════════════════════════════════════════ */
+#define S_COLOR_OUTLINE lv_color_hex(0x79747E)
+#define S_COLOR_OUTLINE_VARIANT lv_color_hex(0xCAC4D0)
 
-/* ========== 表面容器（层次） ========== */
-#define DHC_SURFACE_DIM lv_color_hex(0x12140E)
-#define DHC_SURFACE_BRIGHT lv_color_hex(0x4F5149)
-#define DHC_SURFACE_CONTAINER_LOWEST lv_color_hex(0x000000)
-#define DHC_SURFACE_CONTAINER_LOW lv_color_hex(0x1E201A)
-#define DHC_SURFACE_CONTAINER lv_color_hex(0x2F312A)
-#define DHC_SURFACE_CONTAINER_HIGH lv_color_hex(0x3A3C35)
-#define DHC_SURFACE_CONTAINER_HIGHEST lv_color_hex(0x454840)
+/* ═══════════════════════════════════════════
+   Error
+   ═══════════════════════════════════════════ */
+#define S_COLOR_ERROR lv_color_hex(0xB3261E)
+#define S_COLOR_ON_ERROR lv_color_hex(0xFFFFFF)
+#define S_COLOR_ERROR_CONTAINER lv_color_hex(0xF9DEDC)
 
-/* ========== 逆色（用于浅色表面） ========== */
-#define DHC_INVERSE_SURFACE lv_color_hex(0xE2E3D8)
-#define DHC_INVERSE_ON_SURFACE lv_color_hex(0x000000)
-#define DHC_INVERSE_PRIMARY lv_color_hex(0x364F17)
+/* ═══════════════════════════════════════════
+   Semantic aliases
+   ═══════════════════════════════════════════ */
+#define S_BG_MAIN S_COLOR_BACKGROUND
+#define S_BG_CARD S_COLOR_SURFACE_LOW
+#define S_BG_SIDEBAR S_COLOR_SURFACE_CONTAINER
+#define S_TEXT_PRIMARY S_COLOR_ON_BACKGROUND
+#define S_TEXT_SECONDARY S_COLOR_ON_SURFACE_VARIANT
+#define S_TEXT_ON_DARK lv_color_hex(0xFFFFFF)
+#define S_DIVIDER S_COLOR_OUTLINE_VARIANT
+
+/* ═══════════════════════════════════════════
+   Spacing & shape (360x360 circular)
+   ═══════════════════════════════════════════ */
+#define S_PAD_H 16
+#define S_PAD_V 12
+#define S_GAP 8
+#define S_RADIUS_CARD 16
+#define S_RADIUS_BTN 20
+#define S_RADIUS_SM 8
 
 #endif

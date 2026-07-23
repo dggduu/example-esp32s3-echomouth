@@ -1,41 +1,43 @@
 /*
- * ULP RISC-V program — GPIO0 monitor for wake-up from deep sleep.
+ * ULP RISC-V program — interrupt-mode wake via TP_INT (GPIO4).
  *
- * Runs periodically (e.g. every 20 ms) while the main CPU is in deep sleep.
- * Monitors GPIO0 (active-low button).  When GPIO0 is pressed (LOW) for a
- * configurable number of consecutive samples, it wakes the main CPU.
+ * Runs periodically (20 ms) while the main CPU is in deep sleep.
+ * CST816S touch controller pulls GPIO4 LOW on touch → ULP wakes CPU immediately.
+ * Minimal debounce: 2 consecutive samples (~40 ms).
+ *
+ * PCA9539 must be configured BEFORE deep sleep:
+ *   Screen power ON  → touch panel stays powered
+ *   Backlight OFF     → save power
  */
 
 #include "ulp_riscv.h"
 #include "ulp_riscv_gpio.h"
 #include "ulp_riscv_utils.h"
 
-/* Number of consecutive LOW samples before wake-up (debounce).
-   With a 20 ms period this gives ~100 ms debounce time. */
-#define DEBOUNCE_COUNT 5
+#define WAKE_GPIO        GPIO_NUM_4
+#define DEBOUNCE_SAMPLES 2
 
-/* Exported variables — accessible from the main CPU via ulp_main.h */
 volatile uint32_t ulp_wake_by_gpio = 0;
 
 int main(void)
 {
-    /* Configure RTC GPIO0 as input with internal pull-up */
-    ulp_riscv_gpio_init(GPIO_NUM_0);
-    ulp_riscv_gpio_input_enable(GPIO_NUM_0);
-    ulp_riscv_gpio_pullup(GPIO_NUM_0);
+    /* Configure RTC GPIO4 as input with internal pull-up.
+     * CST816S TP_INT is open-drain: idle=HIGH (pulled up), touch=LOW. */
+    ulp_riscv_gpio_init(WAKE_GPIO);
+    ulp_riscv_gpio_input_enable(WAKE_GPIO);
+    ulp_riscv_gpio_pullup(WAKE_GPIO);
 
-    /* Debounce counter (lives in RTC memory across ULP wake cycles) */
-    static uint32_t debounce = 0;
+    static uint32_t sample_count = 0;
 
-    if (ulp_riscv_gpio_get_level(GPIO_NUM_0) == 0) {
-        debounce++;
-        if (debounce >= DEBOUNCE_COUNT) {
+    if (ulp_riscv_gpio_get_level(WAKE_GPIO) == 0) {
+        sample_count++;
+        if (sample_count >= DEBOUNCE_SAMPLES) {
             ulp_wake_by_gpio = 1;
             ulp_riscv_wakeup_main_processor();
-            debounce = 0;
+            sample_count = 0;
         }
     } else {
-        debounce = 0;
+        sample_count = 0;
     }
 
     return 0;

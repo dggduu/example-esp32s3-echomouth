@@ -15,7 +15,7 @@ static lv_obj_t *s_textarea;
 static lv_obj_t *s_root;
 static lv_obj_t *s_chat_viewport;
 
-LV_FONT_DECLARE(chinese_font_14px);
+LV_FONT_DECLARE(chili_cn);
 
 static void render_window(void) {
   char time_buf[16];

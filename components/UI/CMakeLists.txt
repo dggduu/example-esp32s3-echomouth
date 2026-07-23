@@ -7,7 +7,7 @@ idf_component_register(
         ${CMAKE_CURRENT_LIST_DIR}/Components/chat_comp.c
         ${CMAKE_CURRENT_LIST_DIR}/Components/gs_qrcode_comp.c
         ${CMAKE_CURRENT_LIST_DIR}/Components/gs_portal.c
-        ${CMAKE_CURRENT_LIST_DIR}/Fonts/chinese_font_14px.c
+        ${CMAKE_CURRENT_LIST_DIR}/Fonts/chili_cn.c
         ${CMAKE_CURRENT_LIST_DIR}/Styles/my_theme.c
         # ${CMAKE_CURRENT_LIST_DIR}/Utils/chat_fifo.c
         ${CMAKE_CURRENT_LIST_DIR}/Utils/net_adapter.c

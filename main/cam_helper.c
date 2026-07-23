@@ -1,5 +1,7 @@
 #include "cam_helper.h"
-#include "esp32_s3_szp.h"
+#include "bsp_camera.h"
+#include "bsp_config.h"
+#include "bsp_pca9539.h"
 #include "esp_log.h"
 #include "freertos/FreeRTOS.h"
 #include "freertos/semphr.h"
@@ -30,8 +32,15 @@ esp_err_t cam_helper_acquire(void) {
     return ESP_OK;
   }
 
-  dvp_pwdn(0);
-  bsp_camera_init();
+  bsp_cam_power_on();
+  esp_err_t ret = bsp_camera_init(20 * 1000 * 1000, PIXFORMAT_YUV422,
+                                   FRAMESIZE_QVGA, 1);
+  if (ret != ESP_OK) {
+    ESP_LOGE(TAG, "Camera init failed: %s", esp_err_to_name(ret));
+    bsp_cam_power_off();
+    cam_helper_unlock();
+    return ret;
+  }
 
   s_cam_running = true;
   s_ref_count = 1;
@@ -53,8 +62,8 @@ void cam_helper_release(void) {
   s_ref_count--;
 
   if (s_ref_count <= 0) {
-    esp_camera_deinit();
-    dvp_pwdn(1);
+    bsp_camera_deinit();
+    bsp_cam_power_off();
     s_cam_running = false;
     s_ref_count = 0;
     ESP_LOGI(TAG, "Camera stopped");

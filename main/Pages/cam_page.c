@@ -23,7 +23,7 @@
 #include "task_manager.h"
 
 #define TAG "PAGE_CAM"
-#define CAM_BUTTON_GPIO GPIO_NUM_0
+#define CAM_BUTTON_GPIO GPIO_NUM_4
 #define JPEG_MAX_SIZE (80 * 1024)
 #define CHUNK_SIZE 32
 #define FAST_CLAMP(x) ((x) < 0 ? 0 : ((x) > 255 ? 255 : (x)))
@@ -328,7 +328,8 @@ static void on_btn_back_to_preview(lv_event_t *e) { cam_cancel_capture(); }
 static lv_obj_t *create_text_btn(lv_obj_t *parent, const char *text,
                                  lv_event_cb_t cb) {
   lv_obj_t *btn = lv_btn_create(parent);
-  lv_obj_set_size(btn, LV_PCT(22), 40);
+  lv_obj_set_style_pad_hor(btn, 12, 0);
+  lv_obj_set_style_pad_ver(btn, 6, 0);
   lv_obj_t *label = lv_label_create(btn);
   lv_label_set_text(label, text);
   lv_obj_center(label);
@@ -411,7 +412,7 @@ static void *page_cam_init(void *args) {
 static lv_obj_t *page_cam_render(lv_obj_t *parent, void *ctx) {
   lv_obj_t *cont = lv_obj_create(parent);
   lv_obj_set_size(cont, LV_PCT(100), LV_PCT(100));
-  lv_obj_set_style_bg_color(cont, lv_color_white(), 0);
+  lv_obj_set_style_bg_opa(cont, LV_OPA_TRANSP, 0);
   lv_obj_set_flex_flow(cont, LV_FLEX_FLOW_COLUMN);
   lv_obj_set_flex_align(cont, LV_FLEX_ALIGN_CENTER, LV_FLEX_ALIGN_CENTER,
                         LV_FLEX_ALIGN_CENTER);

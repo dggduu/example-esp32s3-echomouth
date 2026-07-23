@@ -21,7 +21,7 @@
 
 
 #ifndef CHINESE_FONT_14PX
-#define CHINESE_FONT_14PX 1
+#define CHINESE_FONT_14PX 0
 #endif
 
 #if CHINESE_FONT_14PX

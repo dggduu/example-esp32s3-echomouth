@@ -1,5 +1,7 @@
 #include "audio_helper.h"
-#include "esp32_s3_szp.h"
+#include "bsp_audio.h"
+#include "bsp_board.h"
+#include "bsp_pca9539.h"
 #include "esp_log.h"
 #include "freertos/FreeRTOS.h"
 #include "freertos/semphr.h"
@@ -29,11 +31,18 @@ esp_err_t audio_helper_acquire(void) {
     return ESP_OK;
   }
 
-  pa_en(1);
-  esp_err_t ret = bsp_codec_init();
+  bsp_pa_power_on();
+  esp_err_t ret = bsp_board_audio_power_up();
+  if (ret != ESP_OK) {
+    ESP_LOGE(TAG, "Audio power up failed: %s", esp_err_to_name(ret));
+    bsp_pa_power_off();
+    audio_helper_unlock();
+    return ret;
+  }
+  ret = bsp_audio_init(bsp_board_get_i2s_tx(), bsp_board_get_i2s_rx());
   if (ret != ESP_OK) {
     ESP_LOGE(TAG, "Audio codec init failed: %s", esp_err_to_name(ret));
-    pa_en(0);
+    bsp_pa_power_off();
     audio_helper_unlock();
     return ret;
   }
@@ -56,8 +65,8 @@ void audio_helper_release(void) {
 
   s_ref_count--;
   if (s_ref_count <= 0) {
-    bsp_codec_deinit();
-    pa_en(0);
+    bsp_audio_deinit();
+    bsp_pa_power_off();
     s_audio_running = false;
     s_ref_count = 0;
     ESP_LOGI(TAG, "Audio stopped");

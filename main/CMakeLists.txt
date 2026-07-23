@@ -12,7 +12,6 @@ else()
 endif()
 
 list(APPEND main_srcs
-    "esp32_s3_szp.c"
     "sntp_helper.c"
     "cam_helper.c"
     "Pages/main_page.c"
