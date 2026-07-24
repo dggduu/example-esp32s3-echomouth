@@ -3,15 +3,16 @@
 #include "bsp_board.h"
 #include "bsp_camera.h"
 #include "bsp_config.h"
+#include "bsp_fs.h"
 #include "bsp_lcd.h"
 #include "bsp_pca9539.h"
 #include "cam_helper.h"
-#include "esp_littlefs.h"
 #include "esp_websocket_client.h"
 #include "gs_nav.h"
 #include "mdns.h"
 #include "my_theme.h"
 #include "prov_qr.h"
+#include "sensor.h"
 #include "sntp_helper.h"
 #include "wifi_prov.h"
 #include <esp_wifi.h>
@@ -41,6 +42,8 @@
 #include "esp_lvgl_port.h"
 
 #define OTA_ENRTY_BUTTON_GPIO GPIO_NUM_4
+
+#define CONFIG_LV_USE_FILE_EXPLORER 1
 
 static button_handle_t btn;
 static bool s_ota_mode_active = false;
@@ -91,7 +94,7 @@ static boot_mode_t detect_boot_mode(void) {
 
   ota_button_init();
 
-  for (int i = 0; i < 300; i++) {
+  for (int i = 0; i < 100; i++) {
     if (s_boot_mode == BOOT_MODE_OTA) {
       break;
     }
@@ -104,10 +107,13 @@ static boot_mode_t detect_boot_mode(void) {
 
 static lv_obj_t *splash_page(lv_obj_t *parent, void *ctx) {
   lv_obj_t *cont = lv_obj_create(parent);
-  lv_obj_set_size(cont, 360, 360);
+  lv_obj_set_size(cont, LV_PCT(100), LV_PCT(100));
   lv_obj_set_scrollbar_mode(cont, LV_SCROLLBAR_MODE_OFF);
   lv_obj_set_style_bg_opa(cont, LV_OPA_TRANSP, 0);
   lv_obj_set_style_border_width(cont, 0, 0);
+  lv_obj_set_flex_flow(cont, LV_FLEX_FLOW_COLUMN);
+  lv_obj_set_flex_align(cont, LV_FLEX_ALIGN_CENTER, LV_FLEX_ALIGN_CENTER,
+                        LV_FLEX_ALIGN_CENTER);
 
   lv_obj_t *spinner = lv_spinner_create(cont);
   lv_spinner_set_anim_params(spinner, 4000, 200);
@@ -122,7 +128,7 @@ static lv_obj_t *splash_page(lv_obj_t *parent, void *ctx) {
   lv_obj_t *label_version = lv_label_create(cont);
   char version[50];
   snprintf(version, sizeof(version), "ver:%s", "0.1.0");
-  lv_label_set_text(label, "Initializing...");
+  lv_label_set_text(label, "正在初始化...");
   lv_label_set_text(label_version, version);
 
   lv_obj_set_style_text_color(label, S_TEXT_SECONDARY, 0);
@@ -369,7 +375,7 @@ void efuse_init() {
 }
 
 #include "nvs_helper.h"
-
+extern const gs_page_desc_t page_fd;
 void app_main(void) {
   if (power_manager_is_deep_sleep_wakeup()) {
     ESP_LOGI(TAG, "=== Resuming from ULP deep sleep ===");
@@ -382,18 +388,7 @@ void app_main(void) {
   bsp_lcd_init(&lcd_panel, &touch_handle);
   bsp_lvgl_init(lcd_panel, touch_handle);
   my_ui_theme_init();
-
-  {
-    esp_vfs_littlefs_conf_t conf = {
-        .base_path = "/littlefs",
-        .partition_label = "storage",
-        .format_if_mount_failed = false,
-    };
-    ESP_ERROR_CHECK(esp_vfs_littlefs_register(&conf));
-    size_t total = 0, used = 0;
-    esp_littlefs_info(conf.partition_label, &total, &used);
-    ESP_LOGI(TAG, "LittleFS mounted: total=%d, used=%d", total, used);
-  }
+  ESP_ERROR_CHECK(bsp_fs_init());
 
   nvs_helper_init();
   efuse_init();
@@ -449,16 +444,20 @@ void app_main(void) {
     init_mdns("esp32-s3");
     vTaskDelay(pdMS_TO_TICKS(1000));
     query_mdns_host("aobara-pc");
-    ESP_ERROR_CHECK(http_ping_server());
-    face_detector_helper_init(320, 240);
-
-    cam_helper_acquire();
-    if (face_detector_helper_trigger_detection(1000)) {
-      ESP_LOGI(TAG, "detected facesd");
-    } else {
-      ESP_LOGI(TAG, "undetected facesd");
+    if (!http_ping_server()) {
+      ESP_LOGE(TAG, "HTTP ping failed");
+      // 这里可以处理错误，但不要直接 abort
     }
-    cam_helper_release();
+    cam_helper_config_t cam_cfg = {
+        .xclk_freq_hz = 20000000,         // 10MHz
+        .pixel_format = PIXFORMAT_RGB565, // 或者根据你人脸检测需要的格式定义
+        .frame_size = FRAMESIZE_QVGA,     // 320x240
+        .fb_count = 2,
+        .auto_standby_ms = 5000, // 5秒内没有任何 Task 使用自动切断电源休眠
+    };
+    ESP_ERROR_CHECK(cam_helper_init(&cam_cfg));
+
+    face_detector_helper_init(320, 240);
 
     // 启动s3服务
     uploader_task_start();
@@ -476,6 +475,7 @@ void app_main(void) {
     // }
 
     extern const gs_page_desc_t page_main;
+
     gs_nav_pop();
     gs_nav_push(&page_main, NULL);
   }

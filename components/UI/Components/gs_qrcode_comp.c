@@ -33,7 +33,7 @@ lv_obj_t *gs_qrcode_comp_create(lv_obj_t *parent, const gs_qr_config_t *cfg) {
   lv_obj_set_size(s_qr->root, LV_PCT(100), LV_PCT(100));
   lv_obj_set_style_bg_color(s_qr->root, lv_color_hex(0xffffff), 0);
   lv_obj_set_style_border_width(s_qr->root, 0, 0);
-  lv_obj_set_style_pad_all(s_qr->root, 0, 0);
+  lv_obj_set_style_pad_all(s_qr->root, 20, 0);
 
   s_qr->qr_obj = lv_qrcode_create(s_qr->root);
 

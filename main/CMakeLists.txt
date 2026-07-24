@@ -20,6 +20,8 @@ list(APPEND main_srcs
     "Pages/cam_page.c"
     "Pages/page_todo.c"
     "Pages/page_ota.c"
+    "Pages/debug_page.c"
+    "Pages/cam_test_page.c"
     "utils/http_client_helper.c"
     "utils/s3_helper.c"
     "utils/ota_backend.c"

@@ -6,6 +6,7 @@ idf_component_register(
         bsp_audio.c
         bsp_lcd.c
         bsp_camera.c
+        bsp_fs.c
     INCLUDE_DIRS "include"
     REQUIRES
         driver
@@ -15,4 +16,5 @@ idf_component_register(
         esp32-camera
         esp_lvgl_port
         lvgl
+        littlefs
 )

@@ -1,11 +1,15 @@
 #include "gs_portal.h"
+#include "easing.h"
 #include "freertos/FreeRTOS.h"
 #include "freertos/task.h"
 #include "freertos/timers.h"
 #include "lvgl.h"
-#include "stdlib.h"
-#include "string.h"
+#include <stdlib.h>
+#include <string.h>
+/* ========== 1. 字体声明 ========== */
+LV_FONT_DECLARE(chili_cn);
 
+/* ========== 内部状态变量 ========== */
 static lv_obj_t *g_current_toast = NULL;
 static lv_obj_t *g_current_alert = NULL;
 static TimerHandle_t g_toast_timer = NULL;
@@ -21,6 +25,10 @@ typedef struct {
   };
 } portal_create_params_t;
 
+#define TOAST_ANIM_TIME_MS 300
+#define TOAST_TOP_TARGET_Y 10
+#define TOAST_TOP_START_Y -30
+
 /* ========== 内部函数前置声明 ========== */
 static void _toast_click_cb(lv_event_t *e);
 static void _alert_ok_click(lv_event_t *e);
@@ -29,11 +37,60 @@ static void _async_create_cb(void *user_data);
 static void _async_dismiss_cb(void *user_data);
 static void toast_timer_cb(TimerHandle_t xTimer);
 
+/* ========== 自定义 LVGL 动画属性 setter ========== */
+static void anim_set_opa_cb(void *var, int32_t v) {
+  lv_obj_set_style_opa((lv_obj_t *)var, (lv_opa_t)v, 0);
+}
+
+static void anim_set_y_cb(void *var, int32_t v) {
+  lv_obj_set_y((lv_obj_t *)var, (lv_coord_t)v);
+}
+
+/* ========== 符合 LVGL 规范的 Path 回调函数 ========== */
+static int32_t anim_path_quadratic_ease_out(const lv_anim_t *a) {
+  uint32_t duration = a->duration;
+  if (duration == 0)
+    return a->end_value;
+
+  AHFloat progress = (AHFloat)a->act_time / (AHFloat)duration;
+  if (progress > 1.0f)
+    progress = 1.0f;
+  if (progress < 0.0f)
+    progress = 0.0f;
+
+  AHFloat eased = QuadraticEaseOut(progress);
+  return a->start_value + (int32_t)((a->end_value - a->start_value) * eased);
+}
+
+static int32_t anim_path_quadratic_ease_in(const lv_anim_t *a) {
+  uint32_t duration = a->duration;
+  if (duration == 0)
+    return a->end_value;
+
+  AHFloat progress = (AHFloat)a->act_time / (AHFloat)duration;
+  if (progress > 1.0f)
+    progress = 1.0f;
+  if (progress < 0.0f)
+    progress = 0.0f;
+
+  AHFloat eased = QuadraticEaseIn(progress);
+  return a->start_value + (int32_t)((a->end_value - a->start_value) * eased);
+}
+
+/* Toast 消失动画完成回调 */
+static void _toast_exit_anim_ready_cb(lv_anim_t *a) {
+  (void)a;
+  if (g_current_toast) {
+    lv_obj_delete(g_current_toast);
+    g_current_toast = NULL;
+  }
+}
+
 /* ========== Toast 视图创建 ========== */
 static lv_obj_t *_toast_view_create(lv_obj_t *parent, gs_toast_config_t *cfg) {
   lv_obj_t *root = lv_obj_create(parent);
   lv_obj_set_size(root, lv_pct(100), lv_pct(100));
-  lv_obj_set_style_bg_opa(root, 0, 0);
+  lv_obj_set_style_bg_opa(root, LV_OPA_TRANSP, 0);
   lv_obj_set_style_border_width(root, 0, 0);
   lv_obj_set_style_pad_all(root, 0, 0);
   lv_obj_remove_flag(root, LV_OBJ_FLAG_SCROLLABLE);
@@ -52,13 +109,13 @@ static lv_obj_t *_toast_view_create(lv_obj_t *parent, gs_toast_config_t *cfg) {
   lv_color_t bg_color;
   switch (cfg->type) {
   case GS_TOAST_SUCCESS:
-    bg_color = lv_color_hex(0x529b2e);
+    bg_color = lv_color_hex(0xe1f3d8);
     break;
   case GS_TOAST_FAILED:
-    bg_color = lv_color_hex(0xc45656);
+    bg_color = lv_color_hex(0xfcd3d3);
     break;
   default:
-    bg_color = lv_color_hex(0x909399);
+    bg_color = lv_color_hex(0xd9ecff);
     break;
   }
   lv_obj_set_style_bg_color(card, bg_color, 0);
@@ -68,29 +125,61 @@ static lv_obj_t *_toast_view_create(lv_obj_t *parent, gs_toast_config_t *cfg) {
   lv_label_set_long_mode(label, LV_LABEL_LONG_WRAP);
   lv_obj_set_style_text_align(label, LV_TEXT_ALIGN_CENTER, 0);
 
+  /* 配置中文字体 */
+  lv_obj_set_style_text_font(label, &chili_cn, 0);
+
   lv_coord_t screen_w = lv_display_get_horizontal_resolution(NULL);
-  lv_coord_t max_width = screen_w * 4 / 5;
-  if (max_width > 300)
-    max_width = 300;
+  lv_coord_t max_w = screen_w * 4 / 5;
+  if (max_w > 280)
+    max_w = 280;
 
-  lv_obj_set_width(label, max_width);
+  /* auto-size */
+  lv_obj_set_width(label, LV_SIZE_CONTENT);
   lv_obj_update_layout(label);
-  lv_coord_t label_width = lv_obj_get_width(label);
-  lv_coord_t label_height = lv_obj_get_height(label);
+  lv_coord_t lw = lv_obj_get_width(label);
+  if (lw > max_w)
+    lv_obj_set_width(label, max_w);
+  lv_obj_update_layout(label);
+  lw = lv_obj_get_width(label);
+  lv_coord_t lh = lv_obj_get_height(label);
 
-  lv_coord_t pad_hor =
+  lv_coord_t ph =
       lv_obj_get_style_pad_left(card, 0) + lv_obj_get_style_pad_right(card, 0);
-  lv_coord_t pad_ver =
+  lv_coord_t pv =
       lv_obj_get_style_pad_top(card, 0) + lv_obj_get_style_pad_bottom(card, 0);
-  lv_obj_set_size(card, label_width + pad_hor, label_height + pad_ver);
+  lv_obj_set_size(card, lw + ph + 8, lh + pv);
 
   lv_obj_center(label);
-  lv_obj_align(card, LV_ALIGN_TOP_MID, 0, 10);
+  lv_obj_align(card, LV_ALIGN_TOP_MID, 0, TOAST_TOP_START_Y);
+
+  // 初始透明度设为 0
+  lv_obj_set_style_opa(card, LV_OPA_TRANSP, 0);
 
   if (cfg->click_cb) {
     lv_obj_add_flag(card, LV_OBJ_FLAG_CLICKABLE);
     lv_obj_add_event_cb(card, _toast_click_cb, LV_EVENT_CLICKED, cfg);
   }
+
+  /* ===== 启动进入弹出动画 ===== */
+  // 1. 位置下落动画
+  lv_anim_t a_pos;
+  lv_anim_init(&a_pos);
+  lv_anim_set_var(&a_pos, card);
+  lv_anim_set_values(&a_pos, TOAST_TOP_START_Y, TOAST_TOP_TARGET_Y);
+  lv_anim_set_time(&a_pos, TOAST_ANIM_TIME_MS);
+  lv_anim_set_exec_cb(&a_pos, anim_set_y_cb);
+  lv_anim_set_path_cb(&a_pos, anim_path_quadratic_ease_out);
+  lv_anim_start(&a_pos);
+
+  // 2. 透明度渐显动画
+  lv_anim_t a_opa;
+  lv_anim_init(&a_opa);
+  lv_anim_set_var(&a_opa, card);
+  lv_anim_set_values(&a_opa, LV_OPA_TRANSP, LV_OPA_COVER);
+  lv_anim_set_time(&a_opa, TOAST_ANIM_TIME_MS);
+  lv_anim_set_exec_cb(&a_opa, anim_set_opa_cb);
+  lv_anim_set_path_cb(&a_opa, anim_path_quadratic_ease_out);
+  lv_anim_start(&a_opa);
 
   return root;
 }
@@ -98,7 +187,7 @@ static lv_obj_t *_toast_view_create(lv_obj_t *parent, gs_toast_config_t *cfg) {
 /* Toast 点击回调 */
 static void _toast_click_cb(lv_event_t *e) {
   gs_toast_config_t *cfg = (gs_toast_config_t *)lv_event_get_user_data(e);
-  if (cfg->click_cb) {
+  if (cfg && cfg->click_cb) {
     cfg->click_cb(cfg->user_data);
   }
   gs_portal_toast_dismiss();
@@ -108,7 +197,8 @@ static void _toast_click_cb(lv_event_t *e) {
 static lv_obj_t *_alert_view_create(lv_obj_t *parent, gs_alert_config_t *cfg) {
   lv_obj_t *root = lv_obj_create(parent);
   lv_obj_set_size(root, lv_pct(100), lv_pct(100));
-  lv_obj_set_style_bg_opa(root, 0, 0);
+  lv_obj_set_style_bg_opa(root, LV_OPA_50, 0);
+  lv_obj_set_style_bg_color(root, lv_color_black(), 0);
   lv_obj_set_style_border_width(root, 0, 0);
   lv_obj_set_style_pad_all(root, 0, 0);
   lv_obj_remove_flag(root, LV_OBJ_FLAG_SCROLLABLE);
@@ -121,10 +211,12 @@ static lv_obj_t *_alert_view_create(lv_obj_t *parent, gs_alert_config_t *cfg) {
   lv_obj_align(card, LV_ALIGN_CENTER, 0, 0);
 
   lv_obj_t *title = lv_label_create(card);
+  lv_obj_set_style_text_font(title, &chili_cn, 0);
   lv_label_set_text(title, cfg->title);
-  lv_obj_align(title, LV_ALIGN_TOP_LEFT, 0, 5);
+  lv_obj_align(title, LV_ALIGN_TOP_LEFT, 0, 0);
 
   lv_obj_t *msg = lv_label_create(card);
+  lv_obj_set_style_text_font(msg, &chili_cn, 0);
   lv_label_set_text(msg, cfg->msg);
   lv_obj_set_width(msg, lv_pct(100));
   lv_obj_set_style_text_align(msg, LV_TEXT_ALIGN_LEFT, 0);
@@ -145,32 +237,39 @@ static lv_obj_t *_alert_view_create(lv_obj_t *parent, gs_alert_config_t *cfg) {
   lv_obj_t *cancel_btn = lv_button_create(btn_cont);
   lv_obj_set_style_bg_color(cancel_btn, lv_color_hex(0x909399), 0);
   lv_obj_add_event_cb(cancel_btn, _alert_cancel_click, LV_EVENT_CLICKED, cfg);
-  lv_label_set_text(lv_label_create(cancel_btn), "Cancel");
+  lv_obj_t *cancel_lbl = lv_label_create(cancel_btn);
+  lv_obj_set_style_text_font(cancel_lbl, &chili_cn, 0);
+  lv_label_set_text(cancel_lbl, "取消");
 
   lv_obj_t *ok_btn = lv_button_create(btn_cont);
   lv_obj_set_style_bg_color(ok_btn, lv_color_hex(0x2196f3), 0);
   lv_obj_add_event_cb(ok_btn, _alert_ok_click, LV_EVENT_CLICKED, cfg);
-  lv_label_set_text(lv_label_create(ok_btn), "OK");
+  lv_obj_t *ok_lbl = lv_label_create(ok_btn);
+  lv_obj_set_style_text_font(ok_lbl, &chili_cn, 0);
+  lv_label_set_text(ok_lbl, "确定");
 
   return root;
 }
 
 static void _alert_ok_click(lv_event_t *e) {
   gs_alert_config_t *cfg = (gs_alert_config_t *)lv_event_get_user_data(e);
-  if (cfg->ok_cb)
+  if (cfg && cfg->ok_cb)
     cfg->ok_cb(cfg->user_data);
   gs_portal_alert_dismiss();
 }
 
 static void _alert_cancel_click(lv_event_t *e) {
   gs_alert_config_t *cfg = (gs_alert_config_t *)lv_event_get_user_data(e);
-  if (cfg->cancel_cb)
+  if (cfg && cfg->cancel_cb)
     cfg->cancel_cb(cfg->user_data);
   gs_portal_alert_dismiss();
 }
 
 /* ========== 自动关闭 Toast ========== */
-static void toast_timer_cb(TimerHandle_t xTimer) { gs_portal_toast_dismiss(); }
+static void toast_timer_cb(TimerHandle_t xTimer) {
+  (void)xTimer;
+  gs_portal_toast_dismiss();
+}
 
 /* ========== 异步回调实现 ========== */
 static void _async_create_cb(void *user_data) {
@@ -179,14 +278,30 @@ static void _async_create_cb(void *user_data) {
     return;
 
   if (params->is_alert) {
-    if (g_current_alert)
+    if (g_current_alert) {
       lv_obj_delete(g_current_alert);
+      g_current_alert = NULL;
+    }
+    if (g_alert_cfg) {
+      free(g_alert_cfg);
+      g_alert_cfg = NULL;
+    }
+
     g_alert_cfg = malloc(sizeof(gs_alert_config_t));
     memcpy(g_alert_cfg, &params->alert_cfg, sizeof(gs_alert_config_t));
     g_current_alert = _alert_view_create(lv_layer_top(), g_alert_cfg);
   } else {
-    if (g_current_toast)
+    // 销毁旧 Toast 时清理其正在运行的动画
+    if (g_current_toast) {
+      lv_anim_del(g_current_toast, NULL);
       lv_obj_delete(g_current_toast);
+      g_current_toast = NULL;
+    }
+    if (g_toast_cfg) {
+      free(g_toast_cfg);
+      g_toast_cfg = NULL;
+    }
+
     g_toast_cfg = malloc(sizeof(gs_toast_config_t));
     memcpy(g_toast_cfg, &params->toast_cfg, sizeof(gs_toast_config_t));
     g_current_toast = _toast_view_create(lv_layer_top(), g_toast_cfg);
@@ -221,10 +336,42 @@ static void _async_dismiss_cb(void *user_data) {
     if (g_toast_timer) {
       xTimerStop(g_toast_timer, 0);
     }
+
     if (g_current_toast) {
-      lv_obj_delete(g_current_toast);
-      g_current_toast = NULL;
+      // 停止入场动画
+      lv_anim_del(g_current_toast, NULL);
+
+      lv_obj_t *card = lv_obj_get_child(g_current_toast, 0);
+      if (card) {
+        lv_anim_del(card, NULL);
+
+        // 1. 上浮消失动画
+        lv_anim_t a_pos;
+        lv_anim_init(&a_pos);
+        lv_anim_set_var(&a_pos, card);
+        lv_anim_set_values(&a_pos, lv_obj_get_y(card), TOAST_TOP_START_Y);
+        lv_anim_set_time(&a_pos, TOAST_ANIM_TIME_MS);
+        lv_anim_set_exec_cb(&a_pos, anim_set_y_cb);
+        lv_anim_set_path_cb(&a_pos, anim_path_quadratic_ease_in);
+        lv_anim_start(&a_pos);
+
+        // 2. 渐隐动画
+        lv_anim_t a_opa;
+        lv_anim_init(&a_opa);
+        lv_anim_set_var(&a_opa, card);
+        lv_anim_set_values(&a_opa, lv_obj_get_style_opa(card, 0),
+                           LV_OPA_TRANSP);
+        lv_anim_set_time(&a_opa, TOAST_ANIM_TIME_MS);
+        lv_anim_set_exec_cb(&a_opa, anim_set_opa_cb);
+        lv_anim_set_path_cb(&a_opa, anim_path_quadratic_ease_in);
+        lv_anim_set_ready_cb(&a_opa, _toast_exit_anim_ready_cb);
+        lv_anim_start(&a_opa);
+      } else {
+        lv_obj_delete(g_current_toast);
+        g_current_toast = NULL;
+      }
     }
+
     if (g_toast_cfg) {
       free(g_toast_cfg);
       g_toast_cfg = NULL;

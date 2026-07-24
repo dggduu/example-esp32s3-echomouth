@@ -15,37 +15,29 @@ static void my_theme_apply_cb(lv_theme_t *th, lv_obj_t *obj) {
 
   const lv_font_t *font = &chili_cn;
 
-  /*
-   * 默认所有对象
-   */
-  lv_obj_set_style_text_font(obj, font, LV_PART_MAIN);
-
+  /* default text color for all objects */
   lv_obj_set_style_text_color(obj, S_TEXT_PRIMARY, LV_PART_MAIN);
 
-  /*
-   * Screen
-   */
+  /* Screen */
   if (obj == lv_screen_active()) {
     lv_obj_add_style(obj, &style_screen, LV_PART_MAIN);
-
     return;
   }
 
-  /*
-   * Button
-   */
+  /* Button */
   if (lv_obj_check_type(obj, &lv_button_class)) {
-
     lv_obj_add_style(obj, &style_btn, LV_PART_MAIN);
-
     lv_obj_add_style(obj, &style_btn_pressed, LV_STATE_PRESSED);
   }
 
-  /*
-   * Label
-   */
+  /* Label — use Chinese font, icons keep default */
   if (lv_obj_check_type(obj, &lv_label_class)) {
     lv_obj_add_style(obj, &style_label, LV_PART_MAIN);
+    /* only apply Chinese font to non-icon labels */
+    const char *txt = lv_label_get_text(obj);
+    if (txt && txt[0] != '\xEF') { /* LV_SYMBOL_* starts with 0xEF */
+      lv_obj_set_style_text_font(obj, font, LV_PART_MAIN);
+    }
   }
 
   /*

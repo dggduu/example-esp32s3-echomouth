@@ -6,4 +6,8 @@
 lv_obj_t *chat_comp_create(lv_obj_t *parent);
 // void chat_show_new_msg_toast(void);
 void chat_comp_loop(void);
+
+lv_obj_t *chat_comp_create(lv_obj_t *parent);
+void chat_comp_destroy(void);
+void chat_comp_loop(void);
 #endif

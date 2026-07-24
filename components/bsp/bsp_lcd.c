@@ -375,8 +375,8 @@ esp_err_t bsp_lcd_init(esp_lcd_panel_handle_t *panel,
           .flags =
               {
 
-                  .mirror_x = 1,
-                  .mirror_y = 1,
+                  .mirror_x = 0,
+                  .mirror_y = 0,
                   .swap_xy = 0,
               },
       };
@@ -478,7 +478,7 @@ esp_err_t bsp_lvgl_init(esp_lcd_panel_handle_t panel,
       .io_handle = s_io_handle,
       .panel_handle = panel,
       .control_handle = NULL,
-      .buffer_size = BSP_LCD_H_RES * 20,
+      .buffer_size = BSP_LCD_H_RES * 5,
       .double_buffer = false,
       .hres = BSP_LCD_H_RES,
       .vres = BSP_LCD_V_RES,

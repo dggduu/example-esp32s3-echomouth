@@ -83,6 +83,7 @@ static lv_obj_t *page_ota_render(lv_obj_t *parent, void *ctx_ptr) {
   lv_obj_t *page = lv_obj_create(parent);
   lv_obj_set_size(page, LV_PCT(100), LV_PCT(100));
   lv_obj_set_style_bg_opa(page, LV_OPA_TRANSP, 0);
+  lv_obj_set_style_pad_all(page, 28, 0);
   lv_obj_set_flex_flow(page, LV_FLEX_FLOW_COLUMN);
   lv_obj_set_flex_align(page, LV_FLEX_ALIGN_CENTER, LV_FLEX_ALIGN_CENTER, LV_FLEX_ALIGN_CENTER);
 
@@ -94,7 +95,7 @@ static lv_obj_t *page_ota_render(lv_obj_t *parent, void *ctx_ptr) {
 
   /* title */
   lv_obj_t *lbl_title = lv_label_create(page);
-  lv_label_set_text(lbl_title, "Firmware Update");
+  lv_label_set_text(lbl_title, "固件更新");
   lv_obj_set_style_text_font(lbl_title, &lv_font_montserrat_20, 0);
   lv_obj_set_style_text_color(lbl_title, S_TEXT_PRIMARY, 0);
   lv_obj_set_style_margin_top(lbl_title, S_GAP, 0);
@@ -112,7 +113,7 @@ static lv_obj_t *page_ota_render(lv_obj_t *parent, void *ctx_ptr) {
   lv_obj_set_style_margin_top(ctx->lbl_percent, S_GAP, 0);
 
   ctx->lbl_status = lv_label_create(page);
-  lv_label_set_text(ctx->lbl_status, "Waiting for connection...");
+  lv_label_set_text(ctx->lbl_status, "等待连接...");
   lv_obj_set_style_text_color(ctx->lbl_status, S_TEXT_SECONDARY, 0);
   lv_obj_set_style_margin_top(ctx->lbl_status, S_GAP, 0);
 

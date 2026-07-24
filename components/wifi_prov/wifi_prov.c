@@ -13,6 +13,7 @@
 #include <wifi_provisioning/scheme_ble.h>
 
 #include "cJSON.h"
+#include "freertos/projdefs.h"
 #include "nvs_flash.h"
 
 #include "gs_nav.h"
@@ -345,7 +346,9 @@ static void provisioning_task(void *arg) {
                                     NULL);
 
     // 异步显示二维码
-    wifi_prov_print_qr(service_name, service_name, pop, PROV_TRANSPORT_BLE);
+    wifi_prov_print_qr(service_name, username, pop, PROV_TRANSPORT_BLE);
+
+    vTaskDelay(pdMS_TO_TICKS(500));
 
     xEventGroupWaitBits(wifi_event_group, WIFI_CONNECTED_EVENT, true, true,
                         portMAX_DELAY);

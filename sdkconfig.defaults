@@ -27,3 +27,9 @@ CONFIG_BT_NIMBLE_ENABLED=y
 # Power management: Dynamic Frequency Scaling for ECO mode
 CONFIG_PM_ENABLE=y
 CONFIG_PM_DFS_INIT_AUTO=y
+
+# LVGL file explorer (for debug page)
+CONFIG_LV_USE_FILE_EXPLORER=y
+
+# Pinyin IME 9-key mode (3x3 phone keypad for Chinese input)
+CONFIG_LV_IME_PINYIN_USE_K9_MODE=y

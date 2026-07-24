@@ -1,13 +1,11 @@
-
 #include "chat_comp.h"
 #include "chat_service.h"
+#include "esp_heap_caps.h"
 #include "esp_log.h"
 #include "gs_nav.h"
 #include "gs_portal.h"
 #include "net_adapter.h"
 #include "protocol.h"
-
-#include "esp_heap_caps.h"
 
 static const char *TAG = "GS_CHAT_PAGE";
 
@@ -27,7 +25,6 @@ static void chat_status_callback(net_status_t status, const char *msg) {
     gs_toast_show(msg, GS_TOAST_INFO);
     break;
   case NET_STATUS_CONNECTING:
-
     break;
   default:
     break;
@@ -35,25 +32,20 @@ static void chat_status_callback(net_status_t status, const char *msg) {
 }
 
 static void *chat_init_cb(void *args) {
-  ESP_LOGI("CHAT", "Initialising chat context...");
+  ESP_LOGI(TAG, "Initialising chat context...");
 
   chat_page_ctx_t *ctx = heap_caps_calloc(1, sizeof(chat_page_ctx_t),
                                           MALLOC_CAP_SPIRAM | MALLOC_CAP_8BIT);
 
   if (ctx == NULL) {
-    ESP_LOGE(
-        "CHAT",
-        "CRITICAL: Failed to allocate context! Free Internal: %d, PSRAM: %d",
-        heap_caps_get_free_size(MALLOC_CAP_INTERNAL),
-        heap_caps_get_free_size(MALLOC_CAP_SPIRAM));
+    ESP_LOGE(TAG, "CRITICAL: Failed to allocate context!");
     return NULL;
   }
 
   net_set_status_callback(chat_status_callback);
-
   chat_enter_live();
 
-  ESP_LOGI("CHAT", "Context allocated at %p", ctx);
+  ESP_LOGI(TAG, "Context allocated at %p", ctx);
   return ctx;
 }
 
@@ -64,11 +56,17 @@ static lv_obj_t *chat_render_cb(lv_obj_t *parent, void *ctx) {
 static void chat_update_cb(void *ctx) { chat_comp_loop(); }
 
 static void chat_deinit_cb(void *ctx) {
+  /* 1. 释放 UI 相关的定时器和悬挂对象 */
+  chat_comp_destroy();
+
+  /* 2. 退出聊天模式 */
   chat_exit_chat();
 
   net_reset_status_callback();
 
-  free(ctx);
+  if (ctx) {
+    free(ctx);
+  }
   ESP_LOGI(TAG, "Chat page destroyed, switched to HOME mode.");
 }
 

@@ -133,11 +133,11 @@ void prov_qr_process(void) {
 void wifi_prov_print_qr(const char *name, const char *username, const char *pop,
                         const char *transport) {
   if (!name || !transport) {
-    ESP_LOGW(TAG, "Cannot generate QR code payload. Data missing.");
+    ESP_LOGW(TAG, "无法生成二维码");
     return;
   }
   if (s_qr_queue == NULL) {
-    ESP_LOGE(TAG, "QR queue not initialized, call prov_qr_init() first");
+    ESP_LOGE(TAG, "QR 队列未初始化");
     return;
   }
 
@@ -156,7 +156,7 @@ void wifi_prov_print_qr(const char *name, const char *username, const char *pop,
   // ESP_LOGI(TAG, "send QR:%s", payload);
   // qr_display_req_t req = {
   //     .qr_data = strdup(payload),
-  //     .hint_text = strdup("Scan this QR code to start provisioning")};
+  //     .hint_text = strdup("扫描二维码进行配网")};
 
   // 读取设备派生密钥
   char dev_key_b64[25] = {0};
@@ -201,12 +201,12 @@ void wifi_prov_print_qr(const char *name, const char *username, const char *pop,
   if (!req.qr_data || !req.hint_text) {
     free(req.qr_data);
     free(req.hint_text);
-    ESP_LOGE(TAG, "Failed to allocate memory for QR request");
+    ESP_LOGE(TAG, "QR 内存分配失败");
     return;
   }
 
   if (xQueueSend(s_qr_queue, &req, pdMS_TO_TICKS(1000)) != pdTRUE) {
-    ESP_LOGE(TAG, "Failed to send QR request to queue");
+    ESP_LOGE(TAG, "QR 发送队列失败");
     free(req.qr_data);
     free(req.hint_text);
   }

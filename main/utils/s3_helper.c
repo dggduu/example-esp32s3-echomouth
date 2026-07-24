@@ -7,7 +7,7 @@
 #include "http_client_helper.h"
 #include "img_queue.h"
 #include "nvs_helper.h"
-#include "sdkconfig.h" // 读取 menuconfig 配置
+#include "sdkconfig.h"
 #include "time_test_helper.h"
 #include <freertos/task.h>
 #include <stdio.h>
@@ -27,16 +27,9 @@ static StaticTask_t s_uploader_task_tcb;
 static StackType_t *s_uploader_task_stack = NULL;
 
 #ifdef CONFIG_HTTP_MODE_MDNS
-/**
- * @brief 将预签名 URL 中的 mDNS 主机名替换为实际 IP
- * @param original_url 原始 URL（可能包含 aobara-pc.local）
- * @param out_url 输出缓冲区
- * @param out_len 缓冲区大小
- * @param ip 实际 IP 地址（点分十进制）
- */
 static void rewrite_mdns_url(const char *original_url, char *out_url,
                              size_t out_len, const char *ip) {
-  const char *mdns_host = CONFIG_SERVER_HOSTNAME ".local"; // 使用配置的主机名
+  const char *mdns_host = CONFIG_SERVER_HOSTNAME ".local";
   const char *pos = strstr(original_url, mdns_host);
 
   if (pos && ip && strlen(ip) > 0) {
@@ -48,18 +41,7 @@ static void rewrite_mdns_url(const char *original_url, char *out_url,
     strlcpy(out_url, original_url, out_len);
   }
 }
-#endif // CONFIG_HTTP_MODE_MDNS
-
-static int64_t get_timestamp_ms(void) {
-  time_t now = time(NULL);
-  if (now > 1600000000) {
-    return (int64_t)now * 1000;
-  } else {
-    int64_t fallback = esp_timer_get_time() / 1000;
-    ESP_LOGW(TAG, "NTP not synced, using fallback timestamp: %lld", fallback);
-    return fallback;
-  }
-}
+#endif
 
 static void uploader_task(void *arg) {
   while (1) {
@@ -84,31 +66,36 @@ static void uploader_task(void *arg) {
     nvs_helper_get_i32("storage", "device_id", &device_id);
     int32_t task_id = job.task_id;
 
-    // 获取预签名 URL
+    // 1. 获取预签名 URL
     char url[128];
-    snprintf(url, sizeof(url), "/device/%ld/upload-url", device_id);
+    snprintf(url, sizeof(url), "/device/%d/upload-url", (int)device_id);
     char resp[1024];
     if (!http_get_json(url, resp, sizeof(resp))) {
       goto fail_retry;
     }
 
     cJSON *root = cJSON_Parse(resp);
-    if (!root)
+    if (!root) {
       goto fail_retry;
+    }
+
     cJSON *url_obj = cJSON_GetObjectItem(root, "uploadUrl");
     cJSON *key_obj = cJSON_GetObjectItem(root, "imageKey");
-    if (!url_obj || !key_obj) {
+    if (!url_obj || !url_obj->valuestring || !key_obj ||
+        !key_obj->valuestring) {
       cJSON_Delete(root);
       goto fail_retry;
     }
 
-    char *raw_upload_url = url_obj->valuestring;
-    char *image_key = key_obj->valuestring;
+    char raw_upload_url[512];
+    char image_key[128];
+    strlcpy(raw_upload_url, url_obj->valuestring, sizeof(raw_upload_url));
+    strlcpy(image_key, key_obj->valuestring, sizeof(image_key));
+    cJSON_Delete(root); // 及时释放 HTTP 响应的 JSON 解析树
+    root = NULL;
 
-    char final_upload_url[1024];
-
+    char final_upload_url[512];
 #ifdef CONFIG_HTTP_MODE_MDNS
-    // mDNS 模式：将 URL 中的主机名替换为实际 IP
     char ip[32] = {0};
     if (get_mdns_server_ip(ip, sizeof(ip))) {
       rewrite_mdns_url(raw_upload_url, final_upload_url,
@@ -117,15 +104,13 @@ static void uploader_task(void *arg) {
       strlcpy(final_upload_url, raw_upload_url, sizeof(final_upload_url));
     }
 #else
-    // HTTPS 模式：直接使用原始 URL
     strlcpy(final_upload_url, raw_upload_url, sizeof(final_upload_url));
 #endif
 
-    // 读取并上传文件
+    // 2. 读取二进制图片文件
     FILE *f = fopen(job.path, "rb");
     if (!f) {
       ESP_LOGE(TAG, "File missing: %s", job.path);
-      cJSON_Delete(root);
       img_queue_commit();
       continue;
     }
@@ -136,76 +121,75 @@ static void uploader_task(void *arg) {
 
     uint8_t *buf = heap_caps_malloc(size, MALLOC_CAP_SPIRAM);
     if (!buf) {
-      ESP_LOGE(TAG, "SPIRAM OOM");
+      ESP_LOGE(TAG, "SPIRAM OOM for size: %d", size);
       fclose(f);
-      cJSON_Delete(root);
-      job.retry_count++;
-      img_queue_update_retry(job.retry_count);
-      vTaskDelay(pdMS_TO_TICKS(RETRY_BACKOFF_MS));
-      continue;
+      goto fail_retry;
     }
     fread(buf, 1, size, f);
     fclose(f);
 
+    // 3. PUT 上传 S3
     bool put_success = http_put_binary(final_upload_url, buf, size);
     heap_caps_free(buf);
     if (!put_success) {
-      cJSON_Delete(root);
       goto fail_retry;
     }
 
-    // 调用服务器接口
+    // 4. 上报后端
     bool post_success = false;
     char tick_id[64] = {0};
 
     if (job.type == IMG_TYPE_MONITOR) {
       cJSON *post = cJSON_CreateObject();
       cJSON_AddNumberToObject(post, "deviceId", device_id);
-      if (task_id > 0)
+      if (task_id > 0) {
         cJSON_AddNumberToObject(post, "taskId", task_id);
+      }
       cJSON_AddStringToObject(post, "imageKey", image_key);
-      // int64_t now_ms = get_reliable_timestamp_ms();
-      // cJSON_AddNumberToObject(post, "timestamp", now_ms);
 
       char *json_str = cJSON_PrintUnformatted(post);
-      char resp_body[512];
-      bool http_ok = http_post_json_with_response("/device/image", json_str,
-                                                  resp_body, sizeof(resp_body));
-      free(json_str);
       cJSON_Delete(post);
 
-      if (!http_ok)
-        goto fail_retry;
-
-      // 解析响应中的 tickId
-      cJSON *resp_root = cJSON_Parse(resp_body);
-      if (resp_root) {
-        cJSON *tick_obj = cJSON_GetObjectItem(resp_root, "tickId");
-        if (tick_obj && tick_obj->valuestring) {
-          strlcpy(tick_id, tick_obj->valuestring, sizeof(tick_id));
-          post_success = true;
-        }
-        cJSON_Delete(resp_root);
+      char resp_body[512];
+      bool http_ok = false;
+      if (json_str) {
+        http_ok = http_post_json_with_response("/device/image", json_str,
+                                               resp_body, sizeof(resp_body));
+        free(json_str);
       }
-      if (!post_success)
-        goto fail_retry;
+
+      if (http_ok) {
+        cJSON *resp_root = cJSON_Parse(resp_body);
+        if (resp_root) {
+          cJSON *tick_obj = cJSON_GetObjectItem(resp_root, "tickId");
+          if (tick_obj && tick_obj->valuestring) {
+            strlcpy(tick_id, tick_obj->valuestring, sizeof(tick_id));
+            post_success = true;
+          }
+          cJSON_Delete(resp_root);
+        }
+      }
     } else {
       cJSON *post = cJSON_CreateObject();
       cJSON_AddNumberToObject(post, "deviceId", device_id);
-      if (task_id > 0)
+      if (task_id > 0) {
         cJSON_AddNumberToObject(post, "taskId", task_id);
+      }
       cJSON_AddStringToObject(post, "imageKey", image_key);
       char *json_str = cJSON_PrintUnformatted(post);
-      post_success = http_post_json("/device/image/result", json_str);
       cJSON_Delete(post);
-      free(json_str);
+
+      if (json_str) {
+        post_success = http_post_json("/device/image/result", json_str);
+        free(json_str);
+      }
     }
 
-    cJSON_Delete(root);
-    if (!post_success)
+    if (!post_success) {
       goto fail_retry;
+    }
 
-    // 成功处理
+    // 处理成功，清理本地文件并通知
     remove(job.path);
     img_queue_commit();
     if (job.on_complete) {
@@ -228,7 +212,6 @@ void uploader_task_start(void) {
   if (s_uploader_task_handle != NULL)
     return;
 
-  // 从 PSRAM 分配栈
   s_uploader_task_stack = (StackType_t *)heap_caps_malloc(
       UPLOADER_STACK_SIZE, MALLOC_CAP_SPIRAM | MALLOC_CAP_8BIT);
   if (s_uploader_task_stack == NULL) {
@@ -237,9 +220,10 @@ void uploader_task_start(void) {
   }
 
   size_t stack_depth = UPLOADER_STACK_SIZE / sizeof(StackType_t);
-  s_uploader_task_handle =
-      xTaskCreateStatic(uploader_task, "uploader", stack_depth, NULL, 5,
-                        s_uploader_task_stack, &s_uploader_task_tcb);
+
+  s_uploader_task_handle = xTaskCreateStaticPinnedToCore(
+      uploader_task, "uploader", stack_depth, NULL, 6, s_uploader_task_stack,
+      &s_uploader_task_tcb, 0);
 
   if (s_uploader_task_handle == NULL) {
     ESP_LOGE(TAG, "Failed to create uploader task");

@@ -15,16 +15,12 @@ static int s_window_head = 0;
 static bool s_dirty = false;
 static SemaphoreHandle_t s_fifo_mutex = NULL;
 
-static chat_render_cb_t s_render_cb = NULL;
-
 extern device_mode_t g_current_mode;
 
 static chat_notify_cb_t s_notify_cb = NULL;
-
-void chat_service_register_notify_cb(chat_notify_cb_t cb) { s_notify_cb = cb; }
-
 static chat_reasoning_cb_t s_reasoning_cb = NULL;
 
+void chat_service_register_notify_cb(chat_notify_cb_t cb) { s_notify_cb = cb; }
 void chat_service_register_reasoning_cb(chat_reasoning_cb_t cb) {
   s_reasoning_cb = cb;
 }
@@ -33,7 +29,10 @@ static void add_message_to_window(uint32_t msg_id, uint32_t timestamp,
                                   uint8_t sender, const char *text) {
   if (!text || strlen(text) == 0)
     return;
+
   xSemaphoreTake(s_fifo_mutex, portMAX_DELAY);
+
+  // 1. 填充 FIFO
   msg_t *slot = &s_window[s_window_head];
   slot->msg_id = msg_id;
   slot->timestamp = timestamp;
@@ -44,13 +43,12 @@ static void add_message_to_window(uint32_t msg_id, uint32_t timestamp,
   s_window_head = (s_window_head + 1) % CHAT_WINDOW_SIZE;
   if (s_window_count < CHAT_WINDOW_SIZE)
     s_window_count++;
-  s_dirty = true;
-  xSemaphoreGive(s_fifo_mutex);
-  ESP_LOGI(TAG, "Window updated: %s", text);
 
-  if (s_render_cb) {
-    s_render_cb();
-  }
+  // 2. 仅标记脏数据标志 (Plan B: 不在网络线程调用 UI 渲染回调)
+  s_dirty = true;
+
+  xSemaphoreGive(s_fifo_mutex);
+  ESP_LOGI(TAG, "Window updated & dirty flag set: %s", text);
 }
 
 static void handle_data_packet(protocol_packet_t *pkt) {
@@ -81,7 +79,9 @@ static void handle_data_packet(protocol_packet_t *pkt) {
 }
 
 void chat_service_init(void) {
-  s_fifo_mutex = xSemaphoreCreateMutex();
+  if (!s_fifo_mutex) {
+    s_fifo_mutex = xSemaphoreCreateMutex();
+  }
   memset(s_window, 0, sizeof(s_window));
   s_window_count = 0;
   s_window_head = 0;
@@ -89,7 +89,6 @@ void chat_service_init(void) {
 }
 
 void chat_service_loop(void) {
-
   static uint32_t last_print = 0;
   uint32_t now = xTaskGetTickCount() * portTICK_PERIOD_MS;
   if (now - last_print > 5000) {
@@ -104,7 +103,6 @@ void chat_service_handle_packet(protocol_packet_t *pkt) {
     if (mode == DEVICE_MODE_CHAT_LIVE || mode == DEVICE_MODE_CHAT_HISTORY) {
       handle_data_packet(pkt);
     } else {
-
       ESP_LOGW(TAG, "DATA ignored in home mode");
     }
     break;
@@ -127,8 +125,6 @@ void chat_service_handle_packet(protocol_packet_t *pkt) {
     break;
   }
 }
-
-void chat_service_register_render_cb(chat_render_cb_t cb) { s_render_cb = cb; }
 
 bool chat_window_is_dirty(void) {
   bool dirty;

@@ -78,4 +78,7 @@
 #define S_RADIUS_BTN 20
 #define S_RADIUS_SM 8
 
+/* 360x360 circular screen safe zone (corners clipped) */
+#define S_CIRCLE_PAD 28
+
 #endif

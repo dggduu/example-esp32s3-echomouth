@@ -3,10 +3,10 @@
 #include "cam_shared.h"
 #include "esp_camera.h"
 #include "esp_heap_caps.h"
+#include "esp_jpeg_common.h"
 #include "esp_jpeg_enc.h"
 #include "esp_log.h"
 #include "esp_lvgl_port.h"
-#include "esp_task_wdt.h"
 #include "esp_timer.h"
 #include "gs_nav.h"
 #include "gs_portal.h"
@@ -17,51 +17,125 @@
 #include <stdio.h>
 #include <string.h>
 
+#include "misc/lv_color.h"
 #include "monitor_mamager.h"
 #include "power_manager.h"
 #include "s3_helper.h"
 #include "task_manager.h"
 
 #define TAG "PAGE_CAM"
-#define CAM_BUTTON_GPIO GPIO_NUM_4
 #define JPEG_MAX_SIZE (80 * 1024)
-#define CHUNK_SIZE 32
-#define FAST_CLAMP(x) ((x) < 0 ? 0 : ((x) > 255 ? 255 : (x)))
+
+// 针对 240x240 圆形屏设计的预览分辨率 (320x240 下采样 2 倍)
+#define PREVIEW_W 160
+#define PREVIEW_H 120
+#define SRC_W 320
+#define SRC_H 240
 
 typedef enum {
   CAM_STATE_PREVIEW = 0,
   CAM_STATE_CAPTURED,
 } cam_state_t;
 
-static cam_state_t s_state = CAM_STATE_PREVIEW;
-static cam_shared_ctx_t *s_shared_ctx = NULL;
+typedef struct {
+  cam_state_t state;
+  cam_shared_ctx_t *shared_ctx;
+  cam_subscriber_handle_t cam_sub;
 
-static lv_obj_t *img_obj = NULL;
-static lv_image_dsc_t img_dsc;
+  lv_obj_t *img_obj;
+  lv_image_dsc_t img_dsc;
+  uint8_t *preview_buf; // 160x120 RGB565 预览缓存
 
-static uint8_t *preview_buf = NULL;
-static camera_fb_t *captured_fb = NULL;
+  uint8_t *raw_rgb565_buf; // 320x240 RGB565 原始全分辨率缓存
+  size_t raw_buf_size;
+  bool new_frame_arrived;
 
-static TaskHandle_t fetch_task_handle = NULL;
+  lv_obj_t *state_label;
+  lv_obj_t *btn_take;
+  lv_obj_t *btn_save;
+  lv_obj_t *btn_cancel;
+} cam_page_ctx_t;
 
-static lv_obj_t *state_label = NULL;
+static cam_page_ctx_t *s_ctx = NULL;
 
-#define PREVIEW_W 160
-#define PREVIEW_H 120
-#define SRC_W 320
-#define SRC_H 240
-
-static uint8_t *temp_yuv_buf = NULL;
-
-static volatile bool s_stop_fetch = false;
-
-static void update_state_label(void) {
-  if (!state_label)
+/* ---------------------------------------------------------------
+ * RGB565 专用的 2x 邻域下采样算法 (320x240 -> 160x120)
+ * --------------------------------------------------------------*/
+static void downsample_rgb565_2x(const uint8_t *src, uint8_t *dst, int src_w,
+                                 int src_h) {
+  if (!src || !dst)
     return;
-  const char *text = (s_state == CAM_STATE_PREVIEW) ? "拍照" : "已截图";
+
+  const uint16_t *src16 = (const uint16_t *)src;
+  uint16_t *dst16 = (uint16_t *)dst;
+  int dst_w = src_w / 2;
+  int dst_h = src_h / 2;
+
+  for (int y = 0; y < dst_h; y++) {
+    const uint16_t *src_row = src16 + (y * 2) * src_w;
+    uint16_t *dst_row = dst16 + y * dst_w;
+    for (int x = 0; x < dst_w; x++) {
+      dst_row[x] = src_row[x * 2];
+    }
+  }
+}
+
+/* ---------------------------------------------------------------
+ * 动态更新按键与 UI 状态
+ * --------------------------------------------------------------*/
+static void update_state_ui(cam_page_ctx_t *ctx) {
+  if (!ctx)
+    return;
+
   if (lvgl_port_lock(0)) {
-    lv_label_set_text(state_label, text);
+    if (ctx->state_label) {
+      lv_label_set_text(ctx->state_label, ctx->state == CAM_STATE_PREVIEW
+                                              ? "实时预览"
+                                              : "已锁定照片");
+    }
+
+    if (ctx->state == CAM_STATE_PREVIEW) {
+      if (ctx->btn_take)
+        lv_obj_clear_flag(ctx->btn_take, LV_OBJ_FLAG_HIDDEN);
+      if (ctx->btn_save)
+        lv_obj_add_flag(ctx->btn_save, LV_OBJ_FLAG_HIDDEN);
+      if (ctx->btn_cancel)
+        lv_obj_add_flag(ctx->btn_cancel, LV_OBJ_FLAG_HIDDEN);
+    } else {
+      if (ctx->btn_take)
+        lv_obj_add_flag(ctx->btn_take, LV_OBJ_FLAG_HIDDEN);
+      if (ctx->btn_save)
+        lv_obj_clear_flag(ctx->btn_save, LV_OBJ_FLAG_HIDDEN);
+      if (ctx->btn_cancel)
+        lv_obj_clear_flag(ctx->btn_cancel, LV_OBJ_FLAG_HIDDEN);
+    }
     lvgl_port_unlock();
+  }
+}
+
+/* ---------------------------------------------------------------
+ * 相机订阅者推帧回调 (运行于 cam_capture 任务上下文)
+ * --------------------------------------------------------------*/
+static void on_cam_frame_cb(const camera_fb_t *fb, void *user_arg) {
+  cam_page_ctx_t *ctx = (cam_page_ctx_t *)user_arg;
+  if (!ctx || !fb)
+    return;
+
+  // 仅在预览状态下更新图像，锁定照片时忽略推帧
+  if (ctx->state == CAM_STATE_PREVIEW && fb->format == PIXFORMAT_RGB565) {
+    if (ctx->raw_buf_size < fb->len) {
+      uint8_t *new_buf = heap_caps_realloc(ctx->raw_rgb565_buf, fb->len,
+                                           MALLOC_CAP_SPIRAM | MALLOC_CAP_8BIT);
+      if (new_buf) {
+        ctx->raw_rgb565_buf = new_buf;
+        ctx->raw_buf_size = fb->len;
+      } else {
+        return;
+      }
+    }
+
+    memcpy(ctx->raw_rgb565_buf, fb->buf, fb->len);
+    ctx->new_frame_arrived = true;
   }
 }
 
@@ -71,7 +145,6 @@ static void manual_upload_complete(bool success, const char *image_key,
     return;
 
   upload_user_ctx_t *u_ctx = (upload_user_ctx_t *)user_data;
-
   cam_shared_ctx_t *ctx = (cam_shared_ctx_t *)u_ctx->callback_ctx;
 
   if (ctx) {
@@ -86,150 +159,44 @@ static void manual_upload_complete(bool success, const char *image_key,
   }
 }
 
-static void downsample_from_buffer(uint8_t *src, int src_w, int src_h,
-                                   uint8_t *dst) {
-  if (!src || !dst)
+/* ---------------------------------------------------------------
+ * 拍照 / 保存 / 取消 交互处理
+ * --------------------------------------------------------------*/
+static void cam_take_picture(cam_page_ctx_t *ctx) {
+  if (!ctx || ctx->state != CAM_STATE_PREVIEW)
     return;
 
-  uint16_t *dst16 = (uint16_t *)dst;
-
-  const int dst_w = PREVIEW_W;
-  const int dst_h = PREVIEW_H;
-
-  const int src_stride = src_w * 2; // YUYV 每像素2字节
-
-  for (int y = 0; y < dst_h; y++) {
-    uint8_t *src_row = src + (y * 2) * src_stride;
-    uint16_t *dst_row = dst16 + y * dst_w;
-
-    for (int x = 0; x < dst_w; x++) {
-      // 每两个源像素取一个
-      int src_idx = x * 4;
-
-      int Y = src_row[src_idx];
-      int U = src_row[src_idx + 1] - 128;
-      int V = src_row[src_idx + 3] - 128;
-
-      Y = (Y - 16) * 1164;
-
-      int R = (Y + 1596 * V) >> 10;
-      int G = (Y - 813 * V - 391 * U) >> 10;
-      int B = (Y + 2018 * U) >> 10;
-
-      R = FAST_CLAMP(R);
-      G = FAST_CLAMP(G);
-      B = FAST_CLAMP(B);
-
-      uint16_t rgb565 = ((R & 0xF8) << 8) | ((G & 0xFC) << 3) | (B >> 3);
-
-      dst_row[x] = (rgb565 << 8) | (rgb565 >> 8);
-    }
-  }
+  ctx->state = CAM_STATE_CAPTURED;
+  update_state_ui(ctx);
+  ESP_LOGI(TAG, "Picture captured and locked, waiting for save");
 }
 
-static void downsample_2x_simd_optimized(camera_fb_t *fb) {
-  if (!fb || !preview_buf)
+static void cam_cancel_capture(cam_page_ctx_t *ctx) {
+  if (!ctx || ctx->state != CAM_STATE_CAPTURED)
     return;
-  downsample_from_buffer(fb->buf, fb->width, fb->height, preview_buf);
+
+  ctx->state = CAM_STATE_PREVIEW;
+  update_state_ui(ctx);
+  ESP_LOGI(TAG, "Capture canceled, returned to live preview");
 }
 
-static void cam_fetch_task(void *arg) {
-  bool src_set = false;
-  ESP_LOGI(TAG, "Fetch task started");
-
-  uint8_t *local_temp = heap_caps_malloc(SRC_W * SRC_H * 2, MALLOC_CAP_SPIRAM);
-  if (!local_temp) {
-    ESP_LOGE(TAG, "Failed to allocate temp YUV buffer");
-    fetch_task_handle = NULL;
-    vTaskDelete(NULL);
-    return;
-  }
-  temp_yuv_buf = local_temp;
-
-  for (int retry = 0; retry < 5 && !s_stop_fetch; retry++) {
-    camera_fb_t *fb = cam_helper_get_fb();
-    if (fb) {
-      memcpy(local_temp, fb->buf, fb->len);
-      cam_helper_return_fb(fb);
-      downsample_from_buffer(local_temp, SRC_W, SRC_H, preview_buf);
-      break;
-    }
-    vTaskDelay(pdMS_TO_TICKS(20));
-  }
-
-  while (!s_stop_fetch) {
-    if (!img_obj || s_state != CAM_STATE_PREVIEW) {
-      vTaskDelay(pdMS_TO_TICKS(50));
-      continue;
-    }
-
-    camera_fb_t *fb = cam_helper_get_fb();
-    if (!fb) {
-      vTaskDelay(pdMS_TO_TICKS(10));
-      continue;
-    }
-
-    memcpy(local_temp, fb->buf, fb->len);
-
-    cam_helper_return_fb(fb);
-
-    downsample_from_buffer(local_temp, SRC_W, SRC_H, preview_buf);
-
-    if (lvgl_port_lock(pdMS_TO_TICKS(20))) {
-      if (!src_set) {
-        lv_image_set_src(img_obj, &img_dsc);
-        src_set = true;
-      }
-      lv_obj_invalidate(img_obj);
-      lvgl_port_unlock();
-    }
-
-    vTaskDelay(pdMS_TO_TICKS(30));
-  }
-
-  if (local_temp) {
-    heap_caps_free(local_temp);
-    temp_yuv_buf = NULL;
-  }
-  fetch_task_handle = NULL;
-  ESP_LOGI(TAG, "Fetch task exited");
-  vTaskDelete(NULL);
-}
-
-static void cam_take_picture(void) {
-  if (s_state != CAM_STATE_PREVIEW)
+static void cam_save_picture(cam_page_ctx_t *ctx) {
+  if (!ctx || ctx->state != CAM_STATE_CAPTURED || !ctx->raw_rgb565_buf)
     return;
 
-  captured_fb = cam_helper_get_fb();
-  if (!captured_fb)
-    return;
-
-  downsample_2x_simd_optimized(captured_fb);
-
-  if (lvgl_port_lock(0)) {
-    lv_obj_invalidate(img_obj);
-    lvgl_port_unlock();
-  }
-
-  s_state = CAM_STATE_CAPTURED;
-  update_state_label();
-  ESP_LOGI(TAG, "Picture captured, waiting for save");
-}
-
-static void cam_save_picture(void) {
-  if (s_state != CAM_STATE_CAPTURED || !captured_fb)
-    return;
-
+  // 1. 配置 JPEG 编码器 (输入为 RGB565)
   jpeg_enc_config_t cfg = DEFAULT_JPEG_ENC_CONFIG();
-  cfg.width = captured_fb->width;
-  cfg.height = captured_fb->height;
-  cfg.src_type = JPEG_PIXEL_FORMAT_YCbYCr;
+  cfg.width = SRC_W;
+  cfg.height = SRC_H;
+  cfg.src_type = JPEG_PIXEL_FORMAT_RGB565_LE;
   cfg.quality = 60;
   cfg.task_enable = false;
 
   jpeg_enc_handle_t enc;
-  if (jpeg_enc_open(&cfg, &enc) != JPEG_ERR_OK)
+  if (jpeg_enc_open(&cfg, &enc) != JPEG_ERR_OK) {
+    ESP_LOGE(TAG, "Failed to open JPEG encoder");
     return;
+  }
 
   uint8_t *jpg_buf = jpeg_calloc_align(JPEG_MAX_SIZE, 16);
   if (!jpg_buf) {
@@ -238,7 +205,7 @@ static void cam_save_picture(void) {
   }
 
   int out_len = 0;
-  esp_err_t ret = jpeg_enc_process(enc, captured_fb->buf, captured_fb->len,
+  esp_err_t ret = jpeg_enc_process(enc, ctx->raw_rgb565_buf, ctx->raw_buf_size,
                                    jpg_buf, JPEG_MAX_SIZE, &out_len);
 
   if (ret == JPEG_ERR_OK) {
@@ -256,35 +223,29 @@ static void cam_save_picture(void) {
 
         img_job_t job = {0};
         strlcpy(job.path, path, sizeof(job.path));
-        job.task_id = s_shared_ctx->task_id;
+        job.task_id = ctx->shared_ctx->task_id;
         job.priority = IMG_PRIORITY_HIGH;
         job.type = IMG_TYPE_MANUAL;
         job.on_complete = manual_upload_complete;
-        job.user_data = s_shared_ctx;
         job.retry_count = 0;
 
         static upload_user_ctx_t user_ctx;
         user_ctx.type = UPLOAD_TYPE_MANUAL;
-        user_ctx.device_id = s_shared_ctx->device_id;
-        user_ctx.task_id = s_shared_ctx->task_id;
-        user_ctx.callback_ctx = s_shared_ctx;
+        user_ctx.device_id = ctx->shared_ctx->device_id;
+        user_ctx.task_id = ctx->shared_ctx->task_id;
+        user_ctx.callback_ctx = ctx->shared_ctx;
         job.user_data = &user_ctx;
 
-        ESP_LOGD(TAG, "did:%d, task_id:%d", user_ctx.device_id,
-                 user_ctx.task_id);
         if (img_queue_push(&job)) {
           ESP_LOGI(TAG, "Manual upload queued: %s", path);
 
-          if (xSemaphoreTake(s_shared_ctx->done_sem, pdMS_TO_TICKS(30000)) ==
+          if (xSemaphoreTake(ctx->shared_ctx->done_sem, pdMS_TO_TICKS(30000)) ==
               pdTRUE) {
-            gs_toast_show(s_shared_ctx->success ? "上传成功" : "上传失败",
-                          s_shared_ctx->success ? GS_TOAST_SUCCESS
-                                                : GS_TOAST_FAILED);
-            if (task_manager_complete(s_shared_ctx->task_id)) {
-              ESP_LOGI(TAG, "Task %d completed", s_shared_ctx->task_id);
-            } else {
-              ESP_LOGW(TAG, "Failed to complete task %d",
-                       s_shared_ctx->task_id);
+            gs_toast_show(ctx->shared_ctx->success ? "上传成功" : "上传失败",
+                          ctx->shared_ctx->success ? GS_TOAST_SUCCESS
+                                                   : GS_TOAST_FAILED);
+            if (task_manager_complete(ctx->shared_ctx->task_id)) {
+              ESP_LOGI(TAG, "Task %d completed", ctx->shared_ctx->task_id);
             }
           } else {
             gs_toast_show("上传超时", GS_TOAST_FAILED);
@@ -304,196 +265,212 @@ static void cam_save_picture(void) {
 
   jpeg_free_align(jpg_buf);
   jpeg_enc_close(enc);
-  cam_helper_return_fb(captured_fb);
-  captured_fb = NULL;
 }
 
-static void cam_cancel_capture(void) {
-  if (s_state != CAM_STATE_CAPTURED)
-    return;
-  if (captured_fb) {
-    cam_helper_return_fb(captured_fb);
-    captured_fb = NULL;
-  }
-  s_state = CAM_STATE_PREVIEW;
-  update_state_label();
-  ESP_LOGI(TAG, "Capture canceled, back to preview");
-}
-
+/* 事件回调桥接 */
 static void on_btn_return_pop(lv_event_t *e) { gs_nav_pop(); }
-static void on_btn_take_photo(lv_event_t *e) { cam_take_picture(); }
-static void on_btn_save_photo(lv_event_t *e) { cam_save_picture(); }
-static void on_btn_back_to_preview(lv_event_t *e) { cam_cancel_capture(); }
+static void on_btn_take_photo(lv_event_t *e) { cam_take_picture(s_ctx); }
+static void on_btn_save_photo(lv_event_t *e) { cam_save_picture(s_ctx); }
+static void on_btn_back_to_preview(lv_event_t *e) { cam_cancel_capture(s_ctx); }
 
-static lv_obj_t *create_text_btn(lv_obj_t *parent, const char *text,
-                                 lv_event_cb_t cb) {
+static lv_obj_t *create_circle_btn(lv_obj_t *parent, const char *text,
+                                   lv_event_cb_t cb, uint32_t bg_color) {
   lv_obj_t *btn = lv_btn_create(parent);
-  lv_obj_set_style_pad_hor(btn, 12, 0);
-  lv_obj_set_style_pad_ver(btn, 6, 0);
+  lv_obj_set_size(btn, 48, 48);
+  lv_obj_set_style_radius(btn, LV_RADIUS_CIRCLE, 0);
+  lv_obj_set_style_bg_color(btn, lv_color_hex(bg_color), 0);
+  lv_obj_set_style_pad_all(btn, 0, 0);
+
   lv_obj_t *label = lv_label_create(btn);
   lv_label_set_text(label, text);
   lv_obj_center(label);
+
   lv_obj_add_event_cb(btn, cb, LV_EVENT_CLICKED, NULL);
   return btn;
 }
 
+/* ---------------------------------------------------------------
+ * 页面生命周期实现
+ * --------------------------------------------------------------*/
 static void *page_cam_init(void *args) {
   if (args == NULL) {
     ESP_LOGE(TAG, "Invalid args: cam_page_args_t required");
     return NULL;
   }
 
+  cam_page_ctx_t *ctx = calloc(1, sizeof(cam_page_ctx_t));
+  if (!ctx) {
+    ESP_LOGE(TAG, "Failed to allocate page context");
+    return NULL;
+  }
+
   cam_page_args_t *page_args = (cam_page_args_t *)args;
 
-  if (s_shared_ctx == NULL) {
-    s_shared_ctx =
-        heap_caps_calloc(1, sizeof(cam_shared_ctx_t), MALLOC_CAP_INTERNAL);
-    if (s_shared_ctx == NULL) {
-      ESP_LOGE(TAG, "Failed to allocate shared context");
-      return NULL;
-    }
+  ctx->shared_ctx =
+      heap_caps_calloc(1, sizeof(cam_shared_ctx_t), MALLOC_CAP_INTERNAL);
+  if (!ctx->shared_ctx) {
+    ESP_LOGE(TAG, "Failed to allocate shared context");
+    free(ctx);
+    return NULL;
   }
 
   monitor_task_pause();
   power_manager_report_activity();
 
-  esp_err_t cam_ret = cam_helper_acquire();
-  if (cam_ret != ESP_OK) {
-    ESP_LOGE(TAG, "Failed to acquire camera");
+  ctx->shared_ctx->task_id = page_args->task_id;
+  ctx->shared_ctx->device_id = page_args->device_id;
+  ctx->shared_ctx->done_sem = xSemaphoreCreateBinary();
+
+  // 分配 320x240 全尺寸 RGB565 接收缓存
+  ctx->raw_buf_size = SRC_W * SRC_H * 2;
+  ctx->raw_rgb565_buf =
+      heap_caps_malloc(ctx->raw_buf_size, MALLOC_CAP_SPIRAM | MALLOC_CAP_8BIT);
+
+  // 分配 160x120 LVGL 显示缩放缓存
+  ctx->preview_buf = heap_caps_aligned_alloc(
+      16, PREVIEW_W * PREVIEW_H * 2, MALLOC_CAP_SPIRAM | MALLOC_CAP_8BIT);
+
+  if (!ctx->raw_rgb565_buf || !ctx->preview_buf || !ctx->shared_ctx->done_sem) {
+    ESP_LOGE(TAG, "Failed to allocate buffers or semaphore");
+    if (ctx->shared_ctx->done_sem)
+      vSemaphoreDelete(ctx->shared_ctx->done_sem);
+    if (ctx->raw_rgb565_buf)
+      free(ctx->raw_rgb565_buf);
+    if (ctx->preview_buf)
+      free(ctx->preview_buf);
+    free(ctx->shared_ctx);
+    free(ctx);
     return NULL;
   }
 
-  s_shared_ctx->task_id = page_args->task_id;
-  s_shared_ctx->device_id = page_args->device_id;
+  // 初始化 LVGL 图像描述符
+  ctx->img_dsc.header.cf = LV_COLOR_FORMAT_RGB565_SWAPPED;
+  ctx->img_dsc.header.w = PREVIEW_W;
+  ctx->img_dsc.header.h = PREVIEW_H;
+  ctx->img_dsc.header.stride = PREVIEW_W * 2;
+  ctx->img_dsc.data_size = PREVIEW_W * PREVIEW_H * 2;
+  ctx->img_dsc.data = ctx->preview_buf;
 
-  if (s_shared_ctx->done_sem == NULL) {
-    s_shared_ctx->done_sem = xSemaphoreCreateBinary();
-    if (s_shared_ctx->done_sem == NULL) {
-      ESP_LOGE(TAG, "Failed to create semaphore");
-      return NULL;
-    }
-  }
-  xSemaphoreTake(s_shared_ctx->done_sem, 0);
+  ctx->state = CAM_STATE_PREVIEW;
+  s_ctx = ctx;
 
-  if (preview_buf) {
-    heap_caps_free(preview_buf);
-    preview_buf = NULL;
-  }
-  preview_buf = heap_caps_aligned_alloc(16, PREVIEW_W * PREVIEW_H * 2,
-                                        MALLOC_CAP_SPIRAM | MALLOC_CAP_8BIT);
-  if (preview_buf == NULL) {
-    ESP_LOGE(TAG, "Failed to allocate preview buffer");
-    return NULL;
-  }
-  memset(preview_buf, 0x00, PREVIEW_W * PREVIEW_H * 2);
-
-  img_dsc.header.cf = LV_COLOR_FORMAT_RGB565_SWAPPED;
-  img_dsc.header.w = PREVIEW_W;
-  img_dsc.header.h = PREVIEW_H;
-  img_dsc.header.stride = PREVIEW_W * 2;
-  img_dsc.data_size = PREVIEW_W * PREVIEW_H * 2;
-  img_dsc.data = preview_buf;
-
-  if (fetch_task_handle != NULL) {
-    s_stop_fetch = true;
-    int timeout = 50;
-    while (fetch_task_handle != NULL && timeout-- > 0) {
-      vTaskDelay(pdMS_TO_TICKS(10));
-    }
-    if (fetch_task_handle != NULL) {
-      vTaskDelete(fetch_task_handle);
-      fetch_task_handle = NULL;
-    }
+  // 注册摄像头推帧订阅（自动触发相机通电）
+  ctx->cam_sub = cam_helper_subscribe(on_cam_frame_cb, ctx);
+  if (!ctx->cam_sub) {
+    ESP_LOGE(TAG, "Failed to subscribe camera stream");
   }
 
-  return s_shared_ctx;
+  return ctx;
 }
 
-static lv_obj_t *page_cam_render(lv_obj_t *parent, void *ctx) {
+static lv_obj_t *page_cam_render(lv_obj_t *parent, void *ctx_in) {
+  cam_page_ctx_t *ctx = (cam_page_ctx_t *)ctx_in;
+  if (!ctx)
+    return NULL;
+
   lv_obj_t *cont = lv_obj_create(parent);
   lv_obj_set_size(cont, LV_PCT(100), LV_PCT(100));
-  lv_obj_set_style_bg_opa(cont, LV_OPA_TRANSP, 0);
-  lv_obj_set_flex_flow(cont, LV_FLEX_FLOW_COLUMN);
-  lv_obj_set_flex_align(cont, LV_FLEX_ALIGN_CENTER, LV_FLEX_ALIGN_CENTER,
-                        LV_FLEX_ALIGN_CENTER);
+  lv_obj_set_style_bg_color(cont, lv_color_black(), 0);
+  lv_obj_set_style_pad_all(cont, 0, 0);
   lv_obj_set_scrollbar_mode(cont, LV_SCROLLBAR_MODE_OFF);
+  lv_obj_clear_flag(cont, LV_OBJ_FLAG_SCROLLABLE);
 
-  img_obj = lv_image_create(cont);
-  lv_obj_set_width(img_obj, PREVIEW_W);
-  lv_obj_set_height(img_obj, PREVIEW_H);
-  lv_image_set_src(img_obj, &img_dsc);
+  ctx->img_obj = lv_image_create(cont);
+  lv_obj_set_size(ctx->img_obj, PREVIEW_W, PREVIEW_H);
+  lv_obj_center(ctx->img_obj);
+  lv_image_set_src(ctx->img_obj, &ctx->img_dsc);
 
-  state_label = lv_label_create(cont);
-  lv_label_set_text(state_label, "拍照");
-  lv_obj_set_style_text_color(state_label, lv_color_white(), 0);
+  ctx->state_label = lv_label_create(cont);
+  lv_obj_align(ctx->state_label, LV_ALIGN_TOP_MID, 0, 10);
+  lv_obj_set_style_text_color(ctx->state_label, lv_color_white(), 0);
+  lv_obj_set_style_bg_color(ctx->state_label, lv_color_black(), 0);
+  lv_obj_set_style_bg_opa(ctx->state_label, LV_OPA_60, 0);
+  lv_obj_set_style_pad_hor(ctx->state_label, 10, 0);
+  lv_obj_set_style_pad_ver(ctx->state_label, 4, 0);
+  lv_obj_set_style_radius(ctx->state_label, 10, 0);
 
   lv_obj_t *btn_cont = lv_obj_create(cont);
-  lv_obj_set_size(btn_cont, LV_PCT(90), LV_SIZE_CONTENT);
+  lv_obj_set_size(btn_cont, LV_PCT(100), 60);
+  lv_obj_align(btn_cont, LV_ALIGN_BOTTOM_MID, 0, -8);
   lv_obj_set_style_bg_opa(btn_cont, LV_OPA_TRANSP, 0);
   lv_obj_set_style_border_width(btn_cont, 0, 0);
   lv_obj_set_flex_flow(btn_cont, LV_FLEX_FLOW_ROW);
   lv_obj_set_flex_align(btn_cont, LV_FLEX_ALIGN_SPACE_EVENLY,
                         LV_FLEX_ALIGN_CENTER, LV_FLEX_ALIGN_CENTER);
 
-  create_text_btn(btn_cont, "返回", on_btn_return_pop);
-  create_text_btn(btn_cont, "拍照", on_btn_take_photo);
-  create_text_btn(btn_cont, "保存", on_btn_save_photo);
-  create_text_btn(btn_cont, "预览", on_btn_back_to_preview);
+  create_circle_btn(btn_cont, "返回", on_btn_return_pop, 0x4A4A4A);
+  ctx->btn_take =
+      create_circle_btn(btn_cont, "拍照", on_btn_take_photo, 0x2196F3);
+  ctx->btn_cancel =
+      create_circle_btn(btn_cont, "重拍", on_btn_back_to_preview, 0xFF9800);
+  ctx->btn_save =
+      create_circle_btn(btn_cont, "保存", on_btn_save_photo, 0x4CAF50);
 
-  s_stop_fetch = false;
-  if (fetch_task_handle == NULL) {
-    BaseType_t ret = xTaskCreate(cam_fetch_task, "cam_fetch", 3072, NULL, 4,
-                                 &fetch_task_handle);
-    if (ret != pdPASS) {
-      ESP_LOGE(TAG, "Failed to create fetch task");
-    }
-  }
-
+  update_state_ui(ctx);
   return cont;
 }
 
-static void page_cam_deinit(void *ctx) {
+static void page_cam_update(void *ctx_in) {
+  cam_page_ctx_t *ctx = (cam_page_ctx_t *)ctx_in;
+  if (!ctx || !ctx->img_obj)
+    return;
 
-  s_stop_fetch = true;
+  // 只有收到新帧且处于 Live 预览状态时才更新预览 buffer 并重绘
+  if (ctx->new_frame_arrived && ctx->state == CAM_STATE_PREVIEW) {
+    ctx->new_frame_arrived = false;
 
-  int timeout = 50;
-  while (fetch_task_handle != NULL && timeout-- > 0) {
-    vTaskDelay(pdMS_TO_TICKS(10));
+    // 执行快速 RGB565 2x 降采样
+    downsample_rgb565_2x(ctx->raw_rgb565_buf, ctx->preview_buf, SRC_W, SRC_H);
+
+    if (lvgl_port_lock(0)) {
+      lv_image_set_src(ctx->img_obj, &ctx->img_dsc);
+      lv_obj_invalidate(ctx->img_obj);
+      lvgl_port_unlock();
+    }
+  }
+}
+
+static void page_cam_deinit(void *ctx_in) {
+  cam_page_ctx_t *ctx = (cam_page_ctx_t *)ctx_in;
+  if (!ctx)
+    return;
+
+  // 1. 退订相机，自动触发硬件计数管理机制
+  if (ctx->cam_sub) {
+    cam_helper_unsubscribe(ctx->cam_sub);
+    ctx->cam_sub = NULL;
   }
 
-  if (fetch_task_handle != NULL) {
-    vTaskDelete(fetch_task_handle);
-    fetch_task_handle = NULL;
+  // 2. 释放内存资源
+  if (ctx->raw_rgb565_buf) {
+    heap_caps_free(ctx->raw_rgb565_buf);
+    ctx->raw_rgb565_buf = NULL;
   }
 
-  if (temp_yuv_buf != NULL) {
-
-    heap_caps_free(temp_yuv_buf);
-    temp_yuv_buf = NULL;
+  if (ctx->preview_buf) {
+    heap_caps_free(ctx->preview_buf);
+    ctx->preview_buf = NULL;
   }
 
-  if (captured_fb) {
-    cam_helper_return_fb(captured_fb);
-    captured_fb = NULL;
+  if (ctx->shared_ctx) {
+    if (ctx->shared_ctx->done_sem) {
+      vSemaphoreDelete(ctx->shared_ctx->done_sem);
+      ctx->shared_ctx->done_sem = NULL;
+    }
+    free(ctx->shared_ctx);
+    ctx->shared_ctx = NULL;
   }
-  if (preview_buf) {
-    heap_caps_free(preview_buf);
-    preview_buf = NULL;
-  }
-  img_dsc.data = NULL;
 
-  if (s_shared_ctx && s_shared_ctx->done_sem) {
-    vSemaphoreDelete(s_shared_ctx->done_sem);
-    s_shared_ctx->done_sem = NULL;
-  }
-  img_obj = NULL;
-  cam_helper_release();
+  s_ctx = NULL;
   monitor_task_resume();
+  ESP_LOGI(TAG, "Camera page deinited and resources cleared");
+
+  free(ctx);
 }
 
 const gs_page_desc_t page_cam = {
     .init_cb = page_cam_init,
     .render_cb = page_cam_render,
-    .update_cb = NULL,
+    .update_cb = page_cam_update,
     .deinit_cb = page_cam_deinit,
 };
