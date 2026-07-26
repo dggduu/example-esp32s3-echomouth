@@ -19,10 +19,8 @@ esp_err_t bsp_i2c_init_cam(void);
 i2c_master_bus_handle_t bsp_i2c_get_cam_handle(void);
 
 // 摄像头传感器寄存器读写（16位寄存器地址）
-esp_err_t bsp_i2c_read_cam_reg(uint8_t addr_7bit, uint16_t reg,
-                               uint8_t *value);
-esp_err_t bsp_i2c_write_cam_reg(uint8_t addr_7bit, uint16_t reg,
-                                uint8_t value);
+esp_err_t bsp_i2c_read_cam_reg(uint8_t addr_7bit, uint16_t reg, uint8_t *value);
+esp_err_t bsp_i2c_write_cam_reg(uint8_t addr_7bit, uint16_t reg, uint8_t value);
 
 // 电池总线（新版）
 esp_err_t bsp_i2c_init_bat(void);
@@ -47,6 +45,8 @@ esp_err_t bsp_i2c_write_read_bat(uint8_t addr_7bit, const uint8_t *write_data,
                                  size_t read_len, int timeout_ms);
 
 void bsp_i2c_scan(i2c_master_bus_handle_t bus);
+
+esp_err_t bsp_i2c_deinit_main(void);
 
 #ifdef __cplusplus
 }

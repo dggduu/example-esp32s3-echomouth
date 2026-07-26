@@ -37,22 +37,63 @@ static esp_err_t get_device(i2c_master_bus_handle_t bus, dev_cache_t *cache,
   return ret;
 }
 
+static void bsp_i2c_bus_clear(void) {
+  // 1. 将 SCL 和 SDA 暂时配置为普通 GPIO
+  gpio_config_t io_conf = {
+      .pin_bit_mask = (1ULL << BSP_I2C_MAIN_SCL) | (1ULL << BSP_I2C_MAIN_SDA),
+      .mode = GPIO_MODE_INPUT_OUTPUT_OD, // 开漏模式
+      .pull_up_en = GPIO_PULLUP_ENABLE,  // 使能内部上拉
+      .pull_down_en = GPIO_PULLDOWN_DISABLE,
+      .intr_type = GPIO_INTR_DISABLE,
+  };
+  gpio_config(&io_conf);
+
+  // 2. 检查 SDA 是否被拉低（卡死状态）
+  // 发送 9 个 SCL 时钟脉冲，迫使从机 (PCA9539/CST816S) 释放 SDA
+  for (int i = 0; i < 9; i++) {
+    gpio_set_level(BSP_I2C_MAIN_SCL, 0);
+    esp_rom_delay_us(10);
+    gpio_set_level(BSP_I2C_MAIN_SCL, 1);
+    esp_rom_delay_us(10);
+  }
+
+  // 3. 产生一个 STOP 条件：SCL 为高时，SDA 由低变高
+  gpio_set_level(BSP_I2C_MAIN_SDA, 0);
+  esp_rom_delay_us(10);
+  gpio_set_level(BSP_I2C_MAIN_SCL, 1);
+  esp_rom_delay_us(10);
+  gpio_set_level(BSP_I2C_MAIN_SDA, 1);
+  esp_rom_delay_us(10);
+
+  // 4. 将复位后的 GPIO 释放，交还给 Hardware I2C 控制器
+  gpio_reset_pin(BSP_I2C_MAIN_SCL);
+  gpio_reset_pin(BSP_I2C_MAIN_SDA);
+}
+
 esp_err_t bsp_i2c_init_main(void) {
-  i2c_master_bus_config_t bus_cfg = {
+  if (s_main_bus != NULL) {
+    return ESP_OK;
+  }
+
+  bsp_i2c_bus_clear();
+
+  i2c_master_bus_config_t bus_config = {
       .clk_source = I2C_CLK_SRC_DEFAULT,
       .i2c_port = BSP_I2C_MAIN_PORT,
       .scl_io_num = BSP_I2C_MAIN_SCL,
       .sda_io_num = BSP_I2C_MAIN_SDA,
       .glitch_ignore_cnt = 7,
-      .flags.enable_internal_pullup = false,
+      .flags.enable_internal_pullup = true,
   };
-  esp_err_t ret = i2c_new_master_bus(&bus_cfg, &s_main_bus);
+
+  esp_err_t ret = i2c_new_master_bus(&bus_config, &s_main_bus);
   if (ret != ESP_OK) {
-    ESP_LOGE(TAG, "Main I2C init failed");
-  } else {
-    ESP_LOGI(TAG, "Main I2C initialized");
+    ESP_LOGE(TAG, "Init Main I2C Bus Failed: %s", esp_err_to_name(ret));
+    return ret;
   }
-  return ret;
+
+  ESP_LOGI(TAG, "Main I2C initialized");
+  return ESP_OK;
 }
 
 i2c_master_bus_handle_t bsp_i2c_get_main_handle(void) { return s_main_bus; }
@@ -122,10 +163,12 @@ esp_err_t bsp_i2c_init_cam(void) {
 
 i2c_master_bus_handle_t bsp_i2c_get_cam_handle(void) { return s_cam_bus; }
 
-esp_err_t bsp_i2c_read_cam_reg(uint8_t addr_7bit, uint16_t reg, uint8_t *value) {
+esp_err_t bsp_i2c_read_cam_reg(uint8_t addr_7bit, uint16_t reg,
+                               uint8_t *value) {
   if (s_cam_bus == NULL)
     return ESP_ERR_INVALID_STATE;
-  esp_err_t ret = get_device(s_cam_bus, &s_cam_dev, addr_7bit, BSP_I2C_MAIN_FREQ);
+  esp_err_t ret =
+      get_device(s_cam_bus, &s_cam_dev, addr_7bit, BSP_I2C_MAIN_FREQ);
   if (ret != ESP_OK)
     return ret;
   uint8_t reg_buf[2] = {(reg >> 8) & 0xFF, reg & 0xFF};
@@ -133,56 +176,17 @@ esp_err_t bsp_i2c_read_cam_reg(uint8_t addr_7bit, uint16_t reg, uint8_t *value) 
                                      pdMS_TO_TICKS(100));
 }
 
-esp_err_t bsp_i2c_write_cam_reg(uint8_t addr_7bit, uint16_t reg, uint8_t value) {
+esp_err_t bsp_i2c_write_cam_reg(uint8_t addr_7bit, uint16_t reg,
+                                uint8_t value) {
   if (s_cam_bus == NULL)
     return ESP_ERR_INVALID_STATE;
-  esp_err_t ret = get_device(s_cam_bus, &s_cam_dev, addr_7bit, BSP_I2C_MAIN_FREQ);
+  esp_err_t ret =
+      get_device(s_cam_bus, &s_cam_dev, addr_7bit, BSP_I2C_MAIN_FREQ);
   if (ret != ESP_OK)
     return ret;
   uint8_t buf[3] = {(reg >> 8) & 0xFF, reg & 0xFF, value};
   return i2c_master_transmit(s_cam_dev.dev, buf, 3, pdMS_TO_TICKS(100));
 }
-
-// // 电池总线读写（新版）
-// esp_err_t bsp_i2c_write_bat(uint8_t addr_7bit, const uint8_t *data, size_t
-// len,
-//                             int timeout_ms) {
-//   if (s_bat_bus == NULL)
-//     return ESP_ERR_INVALID_STATE;
-//   esp_err_t ret =
-//       get_device(s_bat_bus, &s_bat_dev, addr_7bit, BSP_I2C_BAT_FREQ);
-//   if (ret != ESP_OK)
-//     return ret;
-//   return i2c_master_transmit(s_bat_dev.dev, data, len,
-//                              pdMS_TO_TICKS(timeout_ms));
-// }
-
-// esp_err_t bsp_i2c_read_bat(uint8_t addr_7bit, uint8_t *data, size_t len,
-//                            int timeout_ms) {
-//   if (s_bat_bus == NULL)
-//     return ESP_ERR_INVALID_STATE;
-//   esp_err_t ret =
-//       get_device(s_bat_bus, &s_bat_dev, addr_7bit, BSP_I2C_BAT_FREQ);
-//   if (ret != ESP_OK)
-//     return ret;
-//   return i2c_master_receive(s_bat_dev.dev, data, len,
-//                             pdMS_TO_TICKS(timeout_ms));
-// }
-
-// esp_err_t bsp_i2c_write_read_bat(uint8_t addr_7bit, const uint8_t
-// *write_data,
-//                                  size_t write_len, uint8_t *read_data,
-//                                  size_t read_len, int timeout_ms) {
-//   if (s_bat_bus == NULL)
-//     return ESP_ERR_INVALID_STATE;
-//   esp_err_t ret =
-//       get_device(s_bat_bus, &s_bat_dev, addr_7bit, BSP_I2C_BAT_FREQ);
-//   if (ret != ESP_OK)
-//     return ret;
-//   return i2c_master_transmit_receive(s_bat_dev.dev, write_data, write_len,
-//                                      read_data, read_len,
-//                                      pdMS_TO_TICKS(timeout_ms));
-// }
 
 void bsp_i2c_scan(i2c_master_bus_handle_t bus) {
   ESP_LOGI(TAG, "Scanning I2C...");
@@ -200,4 +204,31 @@ void bsp_i2c_scan(i2c_master_bus_handle_t bus) {
   }
 
   printf("Total=%d\n", count);
+}
+
+esp_err_t bsp_i2c_deinit_main(void) {
+  if (s_main_bus == NULL) {
+    return ESP_OK;
+  }
+
+  // 1. 显式移除缓存主设备 (PCA9539 等)
+  if (s_main_dev.dev != NULL) {
+    i2c_master_bus_rm_device(s_main_dev.dev);
+    s_main_dev.dev = NULL;
+    s_main_dev.addr = 0;
+  }
+
+  // 2. 注销 I2C 主总线
+  esp_err_t ret = i2c_del_master_bus(s_main_bus);
+  if (ret != ESP_OK) {
+    ESP_LOGW(TAG, "i2c_del_master_bus failed: %s", esp_err_to_name(ret));
+  }
+  s_main_bus = NULL;
+
+  // 3. 将 GPIO5 / GPIO6 从 I2C 矩阵解除绑定，还原为普通 GPIO
+  gpio_reset_pin(BSP_I2C_MAIN_SDA);
+  gpio_reset_pin(BSP_I2C_MAIN_SCL);
+
+  ESP_LOGI(TAG, "Main Hardware I2C unbind done!");
+  return ESP_OK;
 }

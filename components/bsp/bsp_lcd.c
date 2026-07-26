@@ -19,7 +19,7 @@ static const char *TAG = "BSP_LCD";
 static esp_lcd_panel_io_handle_t s_io_handle = NULL;
 static esp_lcd_panel_handle_t s_panel = NULL;
 static esp_lcd_touch_handle_t s_touch = NULL;
-
+static esp_lcd_panel_io_handle_t s_tp_io = NULL;
 static lv_disp_t *disp_handle = NULL;
 static lv_indev_t *touch_indev = NULL;
 
@@ -350,38 +350,35 @@ esp_err_t bsp_lcd_init(esp_lcd_panel_handle_t *panel,
   vTaskDelay(pdMS_TO_TICKS(20));
 
   /*---------------- Touch ----------------*/
-
   s_touch = NULL;
+  s_tp_io = NULL;
 
   i2c_master_bus_handle_t bus = bsp_i2c_get_main_handle();
 
   if (bus) {
-
-    esp_lcd_panel_io_handle_t tp_io;
-
     esp_lcd_panel_io_i2c_config_t tp_io_cfg =
         ESP_LCD_TOUCH_IO_I2C_CST816S_CONFIG();
 
-    if (esp_lcd_new_panel_io_i2c(bus, &tp_io_cfg, &tp_io) == ESP_OK) {
+    if (esp_lcd_new_panel_io_i2c(bus, &tp_io_cfg, &s_tp_io) == ESP_OK) {
 
       esp_lcd_touch_config_t tp_cfg = {
-
           .x_max = BSP_LCD_H_RES,
           .y_max = BSP_LCD_V_RES,
 
-          .rst_gpio_num = BSP_TOUCH_RST,
-          .int_gpio_num = BSP_TOUCH_INT,
+          // 注意：复位已在 bsp_lcd_power_up 中通过 PCA9539 完成，此处填
+          // GPIO_NUM_NC
+          .rst_gpio_num = GPIO_NUM_NC,
+          .int_gpio_num = BSP_TOUCH_INT, // 中断依旧使用 Native GPIO
 
           .flags =
               {
-
                   .mirror_x = 0,
                   .mirror_y = 0,
                   .swap_xy = 0,
               },
       };
 
-      esp_lcd_touch_new_i2c_cst816s(tp_io, &tp_cfg, &s_touch);
+      esp_lcd_touch_new_i2c_cst816s(s_tp_io, &tp_cfg, &s_touch);
     }
   }
 
@@ -532,5 +529,25 @@ esp_err_t bsp_lvgl_init(esp_lcd_panel_handle_t panel,
   ESP_LOGI(TAG, "LVGL port initialized");
   return ESP_OK;
 }
+esp_err_t bsp_lcd_touch_deinit(void) {
+  if (touch_indev) {
+    // 如果 LVGL 绑定了，建议由 LVGL 的 deinit 或者移除 Indev
+    // 逻辑清理，或者直接置空
+    touch_indev = NULL;
+  }
 
+  if (s_touch) {
+    esp_lcd_touch_del(s_touch);
+    s_touch = NULL;
+  }
+
+  // 关键：必须显式销毁 Panel IO，释放 I2C 总线节点！
+  if (s_tp_io) {
+    esp_lcd_panel_io_del(s_tp_io);
+    s_tp_io = NULL;
+  }
+
+  ESP_LOGI(TAG, "LCD Touch & TP_IO successfully de-initialized");
+  return ESP_OK;
+}
 lv_indev_t *bsp_lcd_get_touch_indev(void) { return touch_indev; }

@@ -64,11 +64,24 @@ esp_err_t bsp_pca9539_init(uint8_t addr) {
   s_config_cache[0] = 0;
   s_config_cache[1] = 0;
 
-  ESP_ERROR_CHECK(write_reg(REG_OUTPUT0, 0));
-  ESP_ERROR_CHECK(write_reg(REG_OUTPUT1, 0));
+  // 尝试通信，增加 3 次重试（给休眠唤醒后的 I2C 状态机复位留出时间）
+  esp_err_t ret = ESP_FAIL;
+  for (int retry = 0; retry < 3; retry++) {
+    ret = write_reg(REG_OUTPUT0, 0);
+    if (ret == ESP_OK) {
+      break;
+    }
+    vTaskDelay(pdMS_TO_TICKS(10)); // 适当延时等待总线释放
+  }
 
-  ESP_ERROR_CHECK(write_reg(REG_CONFIG0, 0));
-  ESP_ERROR_CHECK(write_reg(REG_CONFIG1, 0));
+  if (ret != ESP_OK) {
+    ESP_LOGE(TAG, "Init Failed! PCA9539 not responding at 0x%02X", s_addr);
+    return ret;
+  }
+
+  write_reg(REG_OUTPUT1, 0);
+  write_reg(REG_CONFIG0, 0);
+  write_reg(REG_CONFIG1, 0);
 
   ESP_LOGI(TAG, "Init OK (0x%02X)", s_addr);
 
