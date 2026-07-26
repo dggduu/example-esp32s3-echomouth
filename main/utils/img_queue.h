@@ -47,6 +47,10 @@ int img_queue_get_count(void);
 
 bool img_queue_is_full(void);
 
+// 网络状态回调：用于离线/恢复时暂停/冲传上传队列
+void img_queue_set_network_up(bool up);
+bool img_queue_is_network_up(void);
+
 #ifdef __cplusplus
 }
 #endif

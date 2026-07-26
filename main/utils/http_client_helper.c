@@ -281,9 +281,10 @@ bool http_post_json_with_response(const char *path, const char *json,
 }
 
 /*---------------------------------------------------------------
- * 二进制 PUT
+ * 二进制 PUT（带可选 Host 覆写）
  *--------------------------------------------------------------*/
-bool http_put_binary(const char *url, uint8_t *data, int len) {
+bool http_put_binary_with_host(const char *url, uint8_t *data, int len,
+                               const char *host_hdr) {
   if (!url || !data || len <= 0) {
     return false;
   }
@@ -305,6 +306,13 @@ bool http_put_binary(const char *url, uint8_t *data, int len) {
   }
 
   esp_http_client_set_header(client, "Content-Type", "image/jpeg");
+
+  // 覆写 Host 头以匹配 S3 预签名 URL 的原始主机名
+  if (host_hdr && host_hdr[0] != '\0') {
+    esp_http_client_set_header(client, "Host", host_hdr);
+    ESP_LOGI(TAG, "PUT Host override: %s", host_hdr);
+  }
+
   esp_http_client_set_post_field(client, (const char *)data, len);
 
   esp_err_t err = esp_http_client_perform(client);
@@ -323,6 +331,10 @@ bool http_put_binary(const char *url, uint8_t *data, int len) {
 
   esp_http_client_cleanup(client);
   return success;
+}
+
+bool http_put_binary(const char *url, uint8_t *data, int len) {
+  return http_put_binary_with_host(url, data, len, NULL);
 }
 
 /*---------------------------------------------------------------

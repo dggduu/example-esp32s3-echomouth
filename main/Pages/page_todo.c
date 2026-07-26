@@ -1,12 +1,14 @@
 #include "StyleSheet.h"
-#include "esp_log.h"
+#include "core/lv_obj_style_gen.h"
 #include "esp_lvgl_port.h"
 #include "gs_nav.h"
 #include "gs_portal.h"
-#include "lvgl.h"
+#include "lv_conf_internal.h"
 #include "monitor_mamager.h"
 #include "nvs_helper.h"
 #include "task_manager.h"
+#include "ui_circle_toolkit.h"
+#include "ui_circle_utils.h"
 #include <string.h>
 #include <time.h>
 
@@ -18,7 +20,7 @@ static lv_obj_t *s_spinner = NULL; // 异步加载动画句柄
 LV_FONT_DECLARE(chili_cn);
 
 /* ---------------------------------------------------------------
- * 前置函数声明 (解决 undeclared 编译错误)
+ * 前置函数声明
  * --------------------------------------------------------------*/
 static void on_start_click(lv_event_t *e);
 static void on_complete_click(lv_event_t *e);
@@ -34,7 +36,7 @@ static lv_color_t get_status_color(const char *status) {
     return lv_color_hex(0xFFF3E0);
   if (strcmp(status, "rejected") == 0)
     return S_COLOR_ERROR_CONTAINER;
-  return S_COLOR_SURFACE_LOW;
+  return S_COLOR_SURFACE_CONTAINER;
 }
 
 static lv_color_t get_status_text_color(const char *status) {
@@ -51,34 +53,32 @@ static lv_color_t get_status_text_color(const char *status) {
 
 static lv_color_t get_status_btn_color(const char *status) {
   if (strcmp(status, "active") == 0)
-    return lv_color_hex(0x4CAF50);
+    return lv_color_hex(0x2E7D32);
   if (strcmp(status, "rejected") == 0)
     return S_COLOR_ERROR;
   return S_COLOR_PRIMARY;
 }
 
-static void format_deadline(int64_t ms, char *buffer, size_t buf_size) {
-  if (ms <= 0) {
+static void format_deadline(int64_t deadline_sec, char *buffer,
+                            size_t buf_size) {
+  if (deadline_sec <= 0) {
     snprintf(buffer, buf_size, "无截止");
     return;
   }
-  time_t seconds = ms / 1000;
+  time_t seconds = (time_t)deadline_sec;
   struct tm tm_info;
   localtime_r(&seconds, &tm_info);
   strftime(buffer, buf_size, "%m-%d %H:%M", &tm_info);
 }
 
 /*---------------------------------------------------------------
- * Loading 状态控制 (适配 LVGL v9 单参数接口)
+ * Loading 状态控制
  *--------------------------------------------------------------*/
 static void show_loading(bool show) {
   if (lvgl_port_lock(0)) {
     if (show) {
       if (!s_spinner && s_ctx.main_cont) {
-        // LVGL v9 正确调用方式：只传 parent
-        s_spinner = lv_spinner_create(s_ctx.main_cont);
-        lv_obj_set_size(s_spinner, 40, 40);
-        lv_obj_center(s_spinner);
+        s_spinner = ui_circle_create_spinner(s_ctx.main_cont);
       }
     } else {
       if (s_spinner) {
@@ -96,15 +96,17 @@ static void show_loading(bool show) {
 static void update_pagination_ui(page_todo_ctx_t *ctx) {
   lv_label_set_text_fmt(ctx->lbl_page, "%d", ctx->page + 1);
 
-  if (ctx->page > 0)
+  if (ctx->page > 0) {
     lv_obj_clear_state(ctx->btn_prev, LV_STATE_DISABLED);
-  else
+  } else {
     lv_obj_add_state(ctx->btn_prev, LV_STATE_DISABLED);
+  }
 
-  if (ctx->has_more)
+  if (ctx->has_more) {
     lv_obj_clear_state(ctx->btn_next, LV_STATE_DISABLED);
-  else
+  } else {
     lv_obj_add_state(ctx->btn_next, LV_STATE_DISABLED);
+  }
 }
 
 static void render_list_async_cb(void *arg) {
@@ -124,17 +126,48 @@ static void render_list_async_cb(void *arg) {
   page_todo_ctx_t *ctx = &s_ctx;
   lv_obj_clean(ctx->main_cont);
 
+  /* 空数据处理 (Empty State) */
+  if (ctx->task_count == 0) {
+    lv_obj_t *empty_box = lv_obj_create(ctx->main_cont);
+    lv_obj_set_size(empty_box, LV_PCT(100), LV_PCT(100));
+    lv_obj_set_flex_flow(empty_box, LV_FLEX_FLOW_COLUMN);
+    lv_obj_set_flex_align(empty_box, LV_FLEX_ALIGN_CENTER, LV_FLEX_ALIGN_CENTER,
+                          LV_FLEX_ALIGN_CENTER);
+    lv_obj_set_style_bg_opa(empty_box, LV_OPA_TRANSP, 0);
+    lv_obj_set_style_border_width(empty_box, 0, 0);
+
+    lv_obj_t *icon = lv_label_create(empty_box);
+    lv_label_set_text(icon, LV_SYMBOL_OK);
+    lv_obj_set_style_text_font(icon, LV_FONT_DEFAULT, 0);
+    lv_obj_set_style_text_color(icon, S_TEXT_SECONDARY, 0);
+
+    lv_obj_t *lbl_empty = lv_label_create(empty_box);
+    lv_label_set_text(lbl_empty, "暂无待办任务");
+    lv_obj_set_style_text_font(lbl_empty, &chili_cn, 0);
+    lv_obj_set_style_text_color(lbl_empty, S_TEXT_SECONDARY, 0);
+    lv_obj_set_style_margin_top(lbl_empty, 6, 0);
+
+    update_pagination_ui(ctx);
+    lvgl_port_unlock();
+    return;
+  }
+
   for (int i = 0; i < ctx->task_count; i++) {
     task_item_t *item = &ctx->tasks[i];
 
+    /* 任务卡片 */
     lv_obj_t *card = lv_obj_create(ctx->main_cont);
     lv_obj_set_width(card, LV_PCT(100));
     lv_obj_set_height(card, LV_SIZE_CONTENT);
     lv_obj_set_flex_flow(card, LV_FLEX_FLOW_COLUMN);
     lv_obj_set_style_bg_color(card, get_status_color(item->status), 0);
-    lv_obj_set_style_radius(card, 16, 0);
+    lv_obj_set_style_radius(card, S_RADIUS_CARD, 0);
     lv_obj_set_style_border_width(card, 0, 0);
-    lv_obj_set_style_pad_all(card, 12, 0);
+    lv_obj_set_style_pad_all(card, 10, 0);
+    lv_obj_set_style_shadow_color(card, lv_color_hex(0x000000), 0);
+    lv_obj_set_style_shadow_opa(card, LV_OPA_10, 0);
+    lv_obj_set_style_shadow_width(card, 6, 0);
+    lv_obj_set_style_shadow_offset_y(card, 2, 0);
 
     lv_obj_set_flex_align(card, LV_FLEX_ALIGN_CENTER, LV_FLEX_ALIGN_CENTER,
                           LV_FLEX_ALIGN_CENTER);
@@ -145,28 +178,39 @@ static void render_list_async_cb(void *arg) {
     lv_obj_set_style_text_font(lbl_title, &chili_cn, 0);
     lv_obj_set_style_text_color(lbl_title, S_TEXT_PRIMARY, 0);
 
+    /* 点赞数 — 家长在 App 端点赞后孩子端同步显示 */
+    if (item->likes > 0) {
+      lv_obj_t *lbl_likes = lv_label_create(card);
+      lv_label_set_text_fmt(lbl_likes, "已点赞");
+      lv_obj_set_style_text_color(lbl_likes, lv_color_hex(0xEF4444), 0);
+      lv_obj_set_style_text_font(lbl_likes, &chili_cn, 0);
+      lv_obj_set_style_margin_top(lbl_likes, 2, 0);
+    }
+
     /* 截止时间 */
     char deadline_str[32];
     format_deadline(item->deadline, deadline_str, sizeof(deadline_str));
     lv_obj_t *lbl_deadline = lv_label_create(card);
     lv_label_set_text_fmt(lbl_deadline, "截止: %s", deadline_str);
+    lv_obj_set_style_text_font(lbl_deadline, &chili_cn, 0);
     lv_obj_set_style_text_color(lbl_deadline, S_TEXT_SECONDARY, 0);
     lv_obj_set_style_margin_top(lbl_deadline, 2, 0);
 
-    /* 操作按钮 / 状态标签 */
+    /* 操作按钮 / 状态 Badge */
     if (strcmp(item->status, "pending") == 0 ||
         strcmp(item->status, "active") == 0 ||
         strcmp(item->status, "rejected") == 0) {
 
       lv_obj_t *btn = lv_btn_create(card);
-      lv_obj_set_style_radius(btn, LV_RADIUS_CIRCLE, 0);
+      lv_obj_set_style_radius(btn, S_RADIUS_BTN, 0);
       lv_obj_set_style_bg_color(btn, get_status_btn_color(item->status), 0);
       lv_obj_set_style_border_width(btn, 0, 0);
-      lv_obj_set_style_pad_hor(btn, 24, 0);
-      lv_obj_set_style_pad_ver(btn, 6, 0);
+      lv_obj_set_style_pad_hor(btn, 20, 0);
+      lv_obj_set_style_pad_ver(btn, 4, 0);
       lv_obj_set_style_margin_top(btn, 6, 0);
 
       lv_obj_t *btn_lbl = lv_label_create(btn);
+      lv_obj_set_style_text_font(btn_lbl, &chili_cn, 0);
       lv_obj_set_style_text_color(btn_lbl, S_TEXT_ON_DARK, 0);
 
       if (strcmp(item->status, "pending") == 0) {
@@ -183,13 +227,24 @@ static void render_list_async_cb(void *arg) {
                             (void *)(intptr_t)i);
       }
     } else {
-      lv_obj_t *badge = lv_label_create(card);
+      /* 胶囊状态 Badge */
+      lv_obj_t *badge = lv_obj_create(card);
+      lv_obj_set_size(badge, LV_SIZE_CONTENT, LV_SIZE_CONTENT);
+      lv_obj_set_style_radius(badge, LV_RADIUS_CIRCLE, 0);
+      lv_obj_set_style_bg_color(badge, get_status_text_color(item->status), 0);
+      lv_obj_set_style_bg_opa(badge, LV_OPA_20, 0);
+      lv_obj_set_style_pad_hor(badge, 12, 0);
+      lv_obj_set_style_pad_ver(badge, 3, 0);
+      lv_obj_set_style_border_width(badge, 0, 0);
+      lv_obj_set_style_margin_top(badge, 6, 0);
+
+      lv_obj_t *badge_txt = lv_label_create(badge);
       const char *txt =
           strcmp(item->status, "completed") == 0 ? "已完成" : "审核中";
-      lv_label_set_text(badge, txt);
-      lv_obj_set_style_text_color(badge, get_status_text_color(item->status),
-                                  0);
-      lv_obj_set_style_margin_top(badge, 6, 0);
+      lv_label_set_text(badge_txt, txt);
+      lv_obj_set_style_text_font(badge_txt, &chili_cn, 0);
+      lv_obj_set_style_text_color(badge_txt,
+                                  get_status_text_color(item->status), 0);
     }
   }
 
@@ -308,89 +363,97 @@ static void page_todo_deinit(void *ctx) {
 static lv_obj_t *page_todo_render(lv_obj_t *parent, void *ctx_ptr) {
   page_todo_ctx_t *ctx = (page_todo_ctx_t *)ctx_ptr;
 
-  /* 主容器 */
+  const int16_t TOP_BAR_H = 48;
+  const int16_t BOTTOM_BAR_H = 48;
+
+  int16_t top_safe_pad = ui_circle_get_safe_pad(0, TOP_BAR_H);
+  if (top_safe_pad < 16)
+    top_safe_pad = 16;
+
+  int16_t bottom_safe_pad =
+      ui_circle_get_safe_pad(UI_SCREEN_HEIGHT - BOTTOM_BAR_H, BOTTOM_BAR_H);
+  if (bottom_safe_pad < 16)
+    bottom_safe_pad = 16;
+
+  /* 1. 全屏根容器 */
   lv_obj_t *root = lv_obj_create(parent);
-  lv_obj_set_size(root, 360, 360);
+  lv_obj_set_size(root, UI_SCREEN_WIDTH, UI_SCREEN_HEIGHT);
   lv_obj_set_flex_flow(root, LV_FLEX_FLOW_COLUMN);
   lv_obj_set_style_pad_all(root, 0, 0);
-  lv_obj_set_style_bg_opa(root, LV_OPA_TRANSP, 0);
+  lv_obj_set_style_bg_color(root, S_COLOR_BACKGROUND, 0);
   lv_obj_clear_flag(root, LV_OBJ_FLAG_SCROLLABLE);
 
-  /* 1. Header */
+  /* 2. 顶栏 (直接调用 utils 极简生成退出键与居中标题) */
   lv_obj_t *top_bar = lv_obj_create(root);
-  lv_obj_set_size(top_bar, LV_PCT(100), 50);
-  lv_obj_set_flex_flow(top_bar, LV_FLEX_FLOW_ROW);
-  lv_obj_set_flex_align(top_bar, LV_FLEX_ALIGN_CENTER, LV_FLEX_ALIGN_CENTER,
-                        LV_FLEX_ALIGN_CENTER);
+  lv_obj_set_size(top_bar, LV_PCT(100), TOP_BAR_H);
   lv_obj_set_style_bg_opa(top_bar, LV_OPA_TRANSP, 0);
   lv_obj_set_style_border_width(top_bar, 0, 0);
-  lv_obj_set_style_pad_hor(top_bar, 30, 0);
+  lv_obj_set_style_pad_hor(top_bar, top_safe_pad, 0);
+  lv_obj_clear_flag(top_bar, LV_OBJ_FLAG_SCROLLABLE);
 
-  lv_obj_t *back = lv_btn_create(top_bar);
-  lv_obj_set_size(back, 36, 36);
-  lv_obj_set_style_radius(back, LV_RADIUS_CIRCLE, 0);
-  lv_obj_set_style_bg_color(back, S_COLOR_SURFACE_MID, 0);
-  lv_obj_set_style_border_width(back, 0, 0);
-  lv_obj_t *back_label = lv_label_create(back);
-  lv_obj_set_style_text_font(back_label, LV_FONT_DEFAULT, 0);
-  lv_label_set_text(back_label, LV_SYMBOL_LEFT);
-  lv_obj_center(back_label);
-  lv_obj_set_style_text_color(back_label, S_TEXT_PRIMARY, 0);
-  lv_obj_add_event_cb(back, btn_back_event, LV_EVENT_CLICKED, NULL);
+  // 【左侧中央退出键】：工具函数一行搞定
 
-  /* 2. 中间卡片列表区域 */
+  // 【居中标题】：容纳四字“待办事项”
+  lv_obj_t *title = lv_label_create(top_bar);
+  lv_label_set_text(title, "待办事项");
+  lv_obj_set_style_text_font(title, &chili_cn, 0);
+  lv_obj_set_style_text_color(title, S_COLOR_ON_SURFACE, 0);
+  lv_obj_align(title, LV_ALIGN_CENTER, 0, 0);
+
+  /* 3. 中间卡片/加载区域 */
+  int16_t content_safe_pad = ui_circle_get_safe_pad(
+      TOP_BAR_H, UI_SCREEN_HEIGHT - TOP_BAR_H - BOTTOM_BAR_H);
+  if (content_safe_pad < 12)
+    content_safe_pad = 12;
+
   ctx->main_cont = lv_obj_create(root);
   lv_obj_set_width(ctx->main_cont, LV_PCT(100));
   lv_obj_set_flex_grow(ctx->main_cont, 1);
   lv_obj_set_flex_flow(ctx->main_cont, LV_FLEX_FLOW_COLUMN);
-  lv_obj_set_style_bg_opa(ctx->main_cont, LV_OPA_TRANSP, 0);
-  lv_obj_set_style_pad_hor(ctx->main_cont, 40, 0);
-  lv_obj_set_style_pad_ver(ctx->main_cont, 8, 0);
-  lv_obj_set_style_border_width(ctx->main_cont, 0, 0);
-  lv_obj_set_style_pad_gap(ctx->main_cont, 12, 0);
 
-  /* 3. 底部控制栏 */
+  // 居中布局，确保 Spinner 或加载卡片完美对齐
+  lv_obj_set_flex_align(ctx->main_cont, LV_FLEX_ALIGN_CENTER,
+                        LV_FLEX_ALIGN_CENTER, LV_FLEX_ALIGN_CENTER);
+
+  lv_obj_set_style_bg_opa(ctx->main_cont, LV_OPA_TRANSP, 0);
+  lv_obj_set_style_pad_hor(ctx->main_cont, content_safe_pad, 0);
+  lv_obj_set_style_pad_ver(ctx->main_cont, 4, 0);
+  lv_obj_set_style_border_width(ctx->main_cont, 0, 0);
+  lv_obj_set_style_pad_gap(ctx->main_cont, 8, 0);
+
+  /* 4. 底部分页栏 (纯粹的分页控制) */
   lv_obj_t *bottom_bar = lv_obj_create(root);
-  lv_obj_set_size(bottom_bar, LV_PCT(100), 54);
+  lv_obj_set_size(bottom_bar, LV_PCT(100), BOTTOM_BAR_H);
   lv_obj_set_flex_flow(bottom_bar, LV_FLEX_FLOW_ROW);
   lv_obj_set_flex_align(bottom_bar, LV_FLEX_ALIGN_CENTER, LV_FLEX_ALIGN_CENTER,
                         LV_FLEX_ALIGN_CENTER);
   lv_obj_set_style_bg_opa(bottom_bar, LV_OPA_TRANSP, 0);
   lv_obj_set_style_border_width(bottom_bar, 0, 0);
-  lv_obj_set_style_pad_gap(bottom_bar, 20, 0);
+  lv_obj_set_style_pad_hor(bottom_bar, bottom_safe_pad, 0);
+  lv_obj_set_style_pad_gap(bottom_bar, 16, 0);
+  lv_obj_clear_flag(bottom_bar, LV_OBJ_FLAG_SCROLLABLE);
 
-  /* 上一页 */
-  ctx->btn_prev = lv_btn_create(bottom_bar);
-  lv_obj_set_size(ctx->btn_prev, 36, 36);
-  lv_obj_set_style_radius(ctx->btn_prev, LV_RADIUS_CIRCLE, 0);
-  lv_obj_set_style_bg_color(ctx->btn_prev, S_COLOR_SURFACE_MID, 0);
-  lv_obj_set_style_border_width(ctx->btn_prev, 0, 0);
-  lv_obj_t *prev_label = lv_label_create(ctx->btn_prev);
-  lv_obj_set_style_text_font(prev_label, LV_FONT_DEFAULT, 0);
-  lv_label_set_text(prev_label, LV_SYMBOL_PREV);
-  lv_obj_center(prev_label);
-  lv_obj_set_style_text_color(prev_label, S_TEXT_PRIMARY, 0);
+  // 上一页
+  ctx->btn_prev =
+      ui_circle_create_fab(bottom_bar, LV_SYMBOL_PREV,
+                           S_COLOR_SURFACE_CONTAINER_HIGH, S_COLOR_ON_SURFACE);
+  lv_obj_set_style_opa(ctx->btn_prev, LV_OPA_40, LV_STATE_DISABLED);
   lv_obj_add_event_cb(ctx->btn_prev, btn_prev_event, LV_EVENT_CLICKED, NULL);
 
-  /* 页码 */
+  // 页码
   ctx->lbl_page = lv_label_create(bottom_bar);
-  lv_obj_set_style_text_color(ctx->lbl_page, S_TEXT_PRIMARY, 0);
+  lv_obj_set_style_text_color(ctx->lbl_page, S_COLOR_ON_SURFACE, 0);
   lv_obj_set_style_text_align(ctx->lbl_page, LV_TEXT_ALIGN_CENTER, 0);
+  lv_label_set_text(ctx->lbl_page, "1");
 
-  /* 下一页 */
-  ctx->btn_next = lv_btn_create(bottom_bar);
-  lv_obj_set_size(ctx->btn_next, 36, 36);
-  lv_obj_set_style_radius(ctx->btn_next, LV_RADIUS_CIRCLE, 0);
-  lv_obj_set_style_bg_color(ctx->btn_next, S_COLOR_SURFACE_MID, 0);
-  lv_obj_set_style_border_width(ctx->btn_next, 0, 0);
-  lv_obj_t *next_label = lv_label_create(ctx->btn_next);
-  lv_obj_set_style_text_font(next_label, LV_FONT_DEFAULT, 0);
-  lv_label_set_text(next_label, LV_SYMBOL_NEXT);
-  lv_obj_center(next_label);
-  lv_obj_set_style_text_color(next_label, S_TEXT_PRIMARY, 0);
+  // 下一页
+  ctx->btn_next =
+      ui_circle_create_fab(bottom_bar, LV_SYMBOL_NEXT,
+                           S_COLOR_SURFACE_CONTAINER_HIGH, S_COLOR_ON_SURFACE);
+  lv_obj_set_style_opa(ctx->btn_next, LV_OPA_40, LV_STATE_DISABLED);
   lv_obj_add_event_cb(ctx->btn_next, btn_next_event, LV_EVENT_CLICKED, NULL);
-
-  // 异步触发数据加载
+  ui_circle_add_exit_btn(root, btn_back_event);
+  /* 5. 开始加载数据 */
   load_and_render_async();
 
   return root;

@@ -43,11 +43,11 @@ extern "C" {
 #define bsp_lcd_reset_low()                                                    \
   bsp_pca9539_set_pin_level(BSP_PCA9539_PIN(1, BSP_IOEXP_LCD_RST), false)
 
-#define bsp_lcd_touch_reset_high()                                                   \
-  bsp_pca9539_set_pin_level(BSP_PCA9539_PIN(1, BSP_IOEXP_LCD_RST), true)
+#define bsp_lcd_touch_reset_high()                                             \
+  bsp_pca9539_set_pin_level(BSP_PCA9539_PIN(1, BSP_IOEXP_TP_RST), true)
 
-#define bsp_lcd_touch_reset_low()                                                    \
-  bsp_pca9539_set_pin_level(BSP_PCA9539_PIN(1, BSP_IOEX), false)
+#define bsp_lcd_touch_reset_low()                                              \
+  bsp_pca9539_set_pin_level(BSP_PCA9539_PIN(1, BSP_IOEXP_TP_RST), false)
 
 #define bsp_lcd_power_high()                                                   \
   bsp_pca9539_set_pin_level(BSP_PCA9539_PIN(1, BSP_IOEXP_SCREEN_PWR), true)

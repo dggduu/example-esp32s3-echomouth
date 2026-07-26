@@ -9,6 +9,7 @@
 #include "freertos/ringbuf.h"
 #include "freertos/semphr.h"
 #include "freertos/task.h"
+#include "nimble/nimble_port.h"
 #include "nvs_flash.h"
 #include "page_ota.h"
 #include <string.h>
@@ -177,7 +178,15 @@ void ota_backend_deinit(void) {
     vRingbufferDelete(s_ringbuf);
     s_ringbuf = NULL;
   }
+
+  /* 停止 NimBLE 主机任务 */
+  nimble_port_stop();
+  vTaskDelay(pdMS_TO_TICKS(100));
+
+  /* 反初始化 BLE 控制器，释放 DRAM */
   esp_bt_controller_disable();
   esp_bt_controller_deinit();
+  esp_bt_controller_mem_release(ESP_BT_MODE_BLE);
   s_started = false;
+  ESP_LOGI(TAG, "BLE controller deinitialized");
 }

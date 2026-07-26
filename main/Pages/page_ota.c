@@ -1,10 +1,11 @@
 #include "page_ota.h"
+#include "StyleSheet.h"
 #include "esp_log.h"
 #include "esp_lvgl_port.h"
+#include "font/lv_font.h"
 #include "gs_nav.h"
 #include "manager.h"
 #include "ota_backend.h"
-#include "StyleSheet.h"
 #include <stdio.h>
 #include <stdlib.h>
 
@@ -38,7 +39,8 @@ void page_ota_notify_progress(uint32_t current_bytes, uint32_t total_bytes) {
 }
 
 void page_ota_notify_status(const char *status_msg, int state) {
-  if (!status_msg) return;
+  if (!status_msg)
+    return;
   s_ui_data.state = state;
   strncpy(s_ui_data.status, status_msg, sizeof(s_ui_data.status) - 1);
   s_ui_data.status[sizeof(s_ui_data.status) - 1] = '\0';
@@ -47,7 +49,10 @@ void page_ota_notify_status(const char *status_msg, int state) {
 
 static void *page_ota_init(void *args) {
   page_ota_ctx_t *ctx = calloc(1, sizeof(page_ota_ctx_t));
-  if (!ctx) { gs_nav_pop(); return NULL; }
+  if (!ctx) {
+    gs_nav_pop();
+    return NULL;
+  }
 
   if (!ota_backend_init()) {
     ESP_LOGE(TAG, "Failed to init OTA backend");
@@ -60,12 +65,14 @@ static void *page_ota_init(void *args) {
 
 static void page_ota_update(void *ctx_ptr) {
   page_ota_ctx_t *ctx = ctx_ptr;
-  if (!ctx) return;
+  if (!ctx)
+    return;
 
   if (s_ui_data.progress_dirty) {
     s_ui_data.progress_dirty = false;
-    uint32_t percent = s_ui_data.total_bytes
-        ? s_ui_data.current_bytes * 100 / s_ui_data.total_bytes : 0;
+    uint32_t percent = s_ui_data.total_bytes ? s_ui_data.current_bytes * 100 /
+                                                   s_ui_data.total_bytes
+                                             : 0;
     lv_bar_set_value(ctx->bar_progress, percent, LV_ANIM_ON);
     lv_label_set_text_fmt(ctx->lbl_percent, "%lu%%", percent);
   }
@@ -78,14 +85,16 @@ static void page_ota_update(void *ctx_ptr) {
 
 static lv_obj_t *page_ota_render(lv_obj_t *parent, void *ctx_ptr) {
   page_ota_ctx_t *ctx = (page_ota_ctx_t *)ctx_ptr;
-  if (!ctx) return NULL;
+  if (!ctx)
+    return NULL;
 
   lv_obj_t *page = lv_obj_create(parent);
   lv_obj_set_size(page, LV_PCT(100), LV_PCT(100));
   lv_obj_set_style_bg_opa(page, LV_OPA_TRANSP, 0);
   lv_obj_set_style_pad_all(page, 28, 0);
   lv_obj_set_flex_flow(page, LV_FLEX_FLOW_COLUMN);
-  lv_obj_set_flex_align(page, LV_FLEX_ALIGN_CENTER, LV_FLEX_ALIGN_CENTER, LV_FLEX_ALIGN_CENTER);
+  lv_obj_set_flex_align(page, LV_FLEX_ALIGN_CENTER, LV_FLEX_ALIGN_CENTER,
+                        LV_FLEX_ALIGN_CENTER);
 
   /* icon area */
   lv_obj_t *icon = lv_label_create(page);
@@ -95,8 +104,8 @@ static lv_obj_t *page_ota_render(lv_obj_t *parent, void *ctx_ptr) {
 
   /* title */
   lv_obj_t *lbl_title = lv_label_create(page);
-  lv_label_set_text(lbl_title, "固件更新");
-  lv_obj_set_style_text_font(lbl_title, &lv_font_montserrat_20, 0);
+  lv_label_set_text(lbl_title, "Update");
+  lv_obj_set_style_text_font(lbl_title, &lv_font_montserrat_24, 0);
   lv_obj_set_style_text_color(lbl_title, S_TEXT_PRIMARY, 0);
   lv_obj_set_style_margin_top(lbl_title, S_GAP, 0);
 

@@ -13,6 +13,7 @@ idf_component_register(
         ${CMAKE_CURRENT_LIST_DIR}/Utils/net_adapter.c
         ${CMAKE_CURRENT_LIST_DIR}/Utils/protocol.c
         ${CMAKE_CURRENT_LIST_DIR}/Utils/protocol_debug.c
+        
         ${CMAKE_CURRENT_LIST_DIR}/Services/chat_service.c
     INCLUDE_DIRS
         "."

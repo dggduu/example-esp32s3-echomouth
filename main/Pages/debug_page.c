@@ -4,19 +4,19 @@
 
 #include "StyleSheet.h"
 #include "cam_helper.h"
-#include "core/lv_obj_style_gen.h"
 #include "esp_camera.h"
 #include "esp_log.h"
 #include "esp_lvgl_port.h"
 #include "face_detector_helper.h"
-#include "font/lv_symbol_def.h"
 #include "freertos/FreeRTOS.h"
 #include "freertos/task.h"
 #include "gs_nav.h"
-#include "lv_conf_internal.h"
+#include "gs_portal.h"
 #include "lvgl.h"
 #include "misc/lv_color.h"
 #include "monitor_mamager.h"
+#include "power_manager.h"
+#include "ui_circle_toolkit.h"
 
 #include <dirent.h>
 #include <stdio.h>
@@ -28,67 +28,61 @@
 
 #define CAM_W 320
 #define CAM_H 240
-
 #define PREVIEW_W 160
 #define PREVIEW_H 120
-
 #define SCALE_FACTOR ((PREVIEW_W * 256) / CAM_W)
 
+/* 前向声明 */
+static lv_obj_t *create_fab_exit_btn(lv_obj_t *parent);
+
+/* ─── 1. face detection preview (uses cam_helper via face_detector_helper) ───
+ */
 typedef struct {
   lv_obj_t *root;
   lv_obj_t *img_obj;
   lv_image_dsc_t img_dsc;
   uint16_t *fb_buf;
-  size_t fb_buf_size;
+  int tick;
 } fd_preview_ctx_t;
 
-/* 初始化回调 */
 static void *fd_preview_init(void *args) {
-  fd_preview_ctx_t *ctx = calloc(1, sizeof(fd_preview_ctx_t));
-  if (!ctx) {
-    ESP_LOGE(TAG, "Failed to allocate context");
+  fd_preview_ctx_t *ctx = calloc(1, sizeof(*ctx));
+  if (!ctx)
     return NULL;
-  }
-
-  size_t buf_size = CAM_W * CAM_H * sizeof(uint16_t);
-  ctx->fb_buf = heap_caps_malloc(buf_size, MALLOC_CAP_SPIRAM | MALLOC_CAP_8BIT);
+  size_t sz = CAM_W * CAM_H * 2;
+  ctx->fb_buf = heap_caps_malloc(sz, MALLOC_CAP_SPIRAM | MALLOC_CAP_8BIT);
   if (!ctx->fb_buf) {
-    ESP_LOGE(TAG, "Failed to allocate frame buffer");
     free(ctx);
     return NULL;
   }
-  ctx->fb_buf_size = buf_size;
-  memset(ctx->fb_buf, 0, buf_size);
+  memset(ctx->fb_buf, 0, sz);
 
   ctx->img_dsc.header.cf = LV_COLOR_FORMAT_RGB565_SWAPPED;
   ctx->img_dsc.header.w = CAM_W;
   ctx->img_dsc.header.h = CAM_H;
   ctx->img_dsc.header.stride = CAM_W * 2;
-  ctx->img_dsc.data_size = buf_size;
+  ctx->img_dsc.data_size = sz;
   ctx->img_dsc.data = (const uint8_t *)ctx->fb_buf;
 
-  // 启动人脸检测（自动注册 cam_helper 订阅，开启摄像头）
   face_detector_helper_start_continuous();
-
-  ESP_LOGI(TAG, "Face detection preview initialized");
   return ctx;
 }
 
-/* 渲染回调 */
 static lv_obj_t *fd_preview_render(lv_obj_t *parent, void *ctx_in) {
   fd_preview_ctx_t *ctx = (fd_preview_ctx_t *)ctx_in;
-  if (!ctx)
-    return NULL;
 
   ctx->root = lv_obj_create(parent);
   lv_obj_set_size(ctx->root, LV_PCT(100), LV_PCT(100));
   lv_obj_set_style_bg_opa(ctx->root, LV_OPA_TRANSP, 0);
+
+  // 圆形屏内边距适配
   lv_obj_set_flex_flow(ctx->root, LV_FLEX_FLOW_COLUMN);
   lv_obj_set_flex_align(ctx->root, LV_FLEX_ALIGN_CENTER, LV_FLEX_ALIGN_CENTER,
                         LV_FLEX_ALIGN_CENTER);
-  lv_obj_set_style_pad_ver(ctx->root, 30, 0);
-  lv_obj_set_style_pad_hor(ctx->root, 20, 0);
+  lv_obj_set_style_pad_top(ctx->root, 20, 0);
+  lv_obj_set_style_pad_bottom(ctx->root, 15, 0);
 
+  // 图像预览组件
   ctx->img_obj = lv_image_create(ctx->root);
   lv_obj_set_size(ctx->img_obj, PREVIEW_W, PREVIEW_H);
   lv_image_set_scale(ctx->img_obj, SCALE_FACTOR);
@@ -96,46 +90,45 @@ static lv_obj_t *fd_preview_render(lv_obj_t *parent, void *ctx_in) {
   lv_obj_set_style_radius(ctx->img_obj, 12, 0);
   lv_obj_set_style_clip_corner(ctx->img_obj, true, 0);
 
+  // 提示信息
   lv_obj_t *hint = lv_label_create(ctx->root);
-  lv_label_set_text(hint, "人脸检测预览");
+  lv_label_set_text(hint, "Face Detection");
   lv_obj_set_style_text_color(hint, S_TEXT_SECONDARY, 0);
-  lv_obj_set_style_margin_top(hint, 8, 0);
+  lv_obj_set_style_margin_top(hint, 4, 0);
 
+  // FAB 退出按钮
+  create_fab_exit_btn(ctx->root);
+
+  face_detector_helper_start_continuous();
   return ctx->root;
 }
 
-/* 周期刷新回调（替代原 Task 轮询，由 LVGL 线程带起） */
 static void fd_preview_update(void *ctx_in) {
   fd_preview_ctx_t *ctx = (fd_preview_ctx_t *)ctx_in;
   if (!ctx || !ctx->img_obj)
     return;
 
-  // 从共享缓存中尝试提取已画框的 RGB565 帧
+  // 1. 获取最新一帧图像数据到 ctx->fb_buf
   if (face_detector_helper_get_latest_rgb565(ctx->fb_buf, CAM_W, CAM_H)) {
-    if (lvgl_port_lock(0)) {
-      lv_image_set_src(ctx->img_obj, &ctx->img_dsc);
-      lv_obj_invalidate(ctx->img_obj);
-      lvgl_port_unlock();
-    }
+    // 2. 重新指引数据源并标记需要重绘（无需调用 cache_drop）
+    lv_image_set_src(ctx->img_obj, &ctx->img_dsc);
+    lv_obj_invalidate(ctx->img_obj);
   }
 }
 
-/* 反初始化回调 */
 static void fd_preview_deinit(void *ctx_in) {
   fd_preview_ctx_t *ctx = (fd_preview_ctx_t *)ctx_in;
   if (!ctx)
     return;
 
-  // 停止人脸检测（自动退订 cam_helper，若无其它订阅则自动下电摄像头）
+  // 先停止摄像头推流和检测，防止解构过程中继续刷帧
   face_detector_helper_stop_continuous();
 
   if (ctx->fb_buf) {
     heap_caps_free(ctx->fb_buf);
     ctx->fb_buf = NULL;
   }
-
   free(ctx);
-  ESP_LOGI(TAG, "Face detection preview deinitialized");
 }
 
 const gs_page_desc_t page_fd = {
@@ -174,7 +167,6 @@ static void on_item_click(lv_event_t *e) {
       strcpy(ctx->current_path, VFS_ROOT_PATH);
     }
   } else {
-    // 缓冲区调大到 384 字节，满足 ctx->current_path(128) + '/' + name(255)
     char next_path[384];
     snprintf(next_path, sizeof(next_path), "%.128s/%.255s", ctx->current_path,
              name);
@@ -218,7 +210,6 @@ static void populate_file_list(vfs_explorer_ctx_t *ctx) {
       continue;
     }
 
-    // 扩大全路径缓冲区至 384 字节 (128 + 1 + 255)
     char full_path[384];
     snprintf(full_path, sizeof(full_path), "%.128s/%.255s", ctx->current_path,
              entry->d_name);
@@ -231,7 +222,6 @@ static void populate_file_list(vfs_explorer_ctx_t *ctx) {
       fsize = st.st_size;
     }
 
-    // 扩大显示文字缓冲区至 300 字节 (255 + 额外字符)
     char item_text[300];
     const char *icon = is_dir ? LV_SYMBOL_DIRECTORY : LV_SYMBOL_FILE;
 
@@ -290,6 +280,9 @@ static lv_obj_t *fe_render(lv_obj_t *parent, void *ctx_in) {
   lv_obj_set_style_pad_bottom(ctx->root, 30, 0);
   lv_obj_set_style_pad_hor(ctx->root, 24, 0);
 
+  // FAB 退出按钮
+  create_fab_exit_btn(ctx->root);
+
   ctx->path_lbl = lv_label_create(ctx->root);
   lv_label_set_text(ctx->path_lbl, ctx->current_path);
   lv_obj_set_style_text_font(ctx->path_lbl, &lv_font_montserrat_14, 0);
@@ -318,7 +311,46 @@ static const gs_page_desc_t page_fexplorer = {
     .init_cb = fe_init, .render_cb = fe_render, .deinit_cb = fe_deinit};
 
 /* ─────────────────────────────────────────────────────────────
- * 3. 调试主界面
+ * 3. 电源模式测试 子菜单
+ * ───────────────────────────────────────────────────────────── */
+static lv_obj_t *make_debug_btn(lv_obj_t *parent, const char *icon,
+                                const char *label, const char *action);
+
+static lv_obj_t *debug_pwr_render(lv_obj_t *parent, void *ctx) {
+  lv_obj_t *cont = lv_obj_create(parent);
+  lv_obj_set_size(cont, LV_PCT(100), LV_PCT(100));
+  lv_obj_set_style_bg_opa(cont, LV_OPA_TRANSP, 0);
+  lv_obj_set_flex_flow(cont, LV_FLEX_FLOW_COLUMN);
+  lv_obj_set_flex_align(cont, LV_FLEX_ALIGN_CENTER, LV_FLEX_ALIGN_CENTER,
+                        LV_FLEX_ALIGN_CENTER);
+  lv_obj_set_style_pad_all(cont, 28, 0);
+  lv_obj_set_style_pad_gap(cont, S_GAP, 0);
+
+  // FAB 退出按钮
+  create_fab_exit_btn(cont);
+
+  lv_obj_t *title = lv_label_create(cont);
+  lv_label_set_text(title, "Power Test");
+  lv_obj_set_style_text_font(title, &lv_font_montserrat_24, 0);
+  lv_obj_set_style_text_color(title, S_TEXT_PRIMARY, 0);
+
+  make_debug_btn(cont, LV_SYMBOL_HOME, "NORMAL: wake up / reset timers",
+                 "normal");
+  make_debug_btn(cont, LV_SYMBOL_CHARGE, "ECO: restart countdown", "eco");
+  make_debug_btn(cont, LV_SYMBOL_POWER, "DEEP SLEEP: ULP + touch wake", "deep");
+  make_debug_btn(cont, LV_SYMBOL_LEFT, "Back", "back");
+
+  return cont;
+}
+
+static const gs_page_desc_t page_debug_power = {
+    .init_cb = NULL,
+    .render_cb = debug_pwr_render,
+    .deinit_cb = NULL,
+};
+
+/* ─────────────────────────────────────────────────────────────
+ * 4. 调试主界面
  * ───────────────────────────────────────────────────────────── */
 extern const gs_page_desc_t page_cam_test;
 
@@ -333,6 +365,18 @@ static void on_btn_click(lv_event_t *e) {
     gs_nav_push(&page_fexplorer, NULL);
   } else if (strcmp(action, "cam") == 0) {
     gs_nav_push(&page_cam_test, NULL);
+  } else if (strcmp(action, "power") == 0) {
+    gs_nav_push(&page_debug_power, NULL);
+  } else if (strcmp(action, "normal") == 0) {
+    power_manager_report_activity();
+    gs_toast_show("NORMAL mode", GS_TOAST_SUCCESS);
+  } else if (strcmp(action, "eco") == 0) {
+    power_manager_report_activity();
+    gs_toast_show("ECO countdown restarted", GS_TOAST_INFO);
+  } else if (strcmp(action, "deep") == 0) {
+    power_manager_enter_deep_sleep();
+  } else if (strcmp(action, "back") == 0) {
+    gs_nav_pop();
   } else if (strcmp(action, "exit") == 0) {
     gs_nav_pop();
   }
@@ -379,6 +423,35 @@ static lv_obj_t *make_debug_btn(lv_obj_t *parent, const char *icon,
   return btn;
 }
 
+/* ─── FAB 退出按钮，与聊天页面风格一致 ─── */
+static void fab_exit_cb(lv_event_t *e) { gs_nav_pop(); }
+
+static lv_obj_t *create_fab_exit_btn(lv_obj_t *parent) {
+  int16_t btn_h = 38;
+  int16_t btn_y = (UI_SCREEN_HEIGHT - btn_h) / 2;
+  int16_t btn_pad = ui_circle_get_safe_pad(btn_y, btn_h) + 6;
+
+  lv_obj_t *btn = lv_btn_create(parent);
+  lv_obj_set_size(btn, btn_h, btn_h);
+  lv_obj_set_style_radius(btn, S_RADIUS_BTN, 0);
+  lv_obj_set_style_bg_color(btn, S_COLOR_SECONDARY_CONTAINER, 0);
+  lv_obj_set_style_shadow_color(btn, lv_color_hex(0x000000), 0);
+  lv_obj_set_style_shadow_opa(btn, LV_OPA_20, 0);
+  lv_obj_set_style_shadow_width(btn, 8, 0);
+  lv_obj_set_style_shadow_offset_y(btn, 3, 0);
+
+  lv_obj_t *label = lv_label_create(btn);
+  lv_obj_set_style_text_font(label, LV_FONT_DEFAULT, 0);
+  lv_label_set_text(label, LV_SYMBOL_LEFT);
+  lv_obj_set_style_text_color(label, S_COLOR_ON_SECONDARY_CONTAINER, 0);
+  lv_obj_center(label);
+
+  lv_obj_align(btn, LV_ALIGN_TOP_LEFT, btn_pad, btn_y);
+  lv_obj_add_event_cb(btn, fab_exit_cb, LV_EVENT_CLICKED, NULL);
+
+  return btn;
+}
+
 static void *debug_init(void *args) {
   monitor_task_pause();
   ESP_LOGI(TAG, "调试模式：监控已暂停");
@@ -398,6 +471,9 @@ static lv_obj_t *debug_render(lv_obj_t *parent, void *ctx) {
   lv_obj_set_style_pad_hor(cont, 20, 0);
   lv_obj_set_style_pad_gap(cont, S_GAP, 0);
 
+  // FAB 退出按钮
+  create_fab_exit_btn(cont);
+
   lv_obj_t *title = lv_label_create(cont);
   lv_label_set_text(title, "Debug Mode");
   lv_obj_set_style_text_font(title, &lv_font_montserrat_24, 0);
@@ -407,6 +483,7 @@ static lv_obj_t *debug_render(lv_obj_t *parent, void *ctx) {
   make_debug_btn(cont, LV_SYMBOL_IMAGE, "人脸检测预览", "face");
   make_debug_btn(cont, LV_SYMBOL_IMAGE, "摄像头测试", "cam");
   make_debug_btn(cont, LV_SYMBOL_DIRECTORY, "文件管理", "files");
+  make_debug_btn(cont, LV_SYMBOL_POWER, "电源模式测试", "power");
   make_debug_btn(cont, LV_SYMBOL_CLOSE, "退出调试", "exit");
 
   lv_obj_t *info = lv_label_create(cont);

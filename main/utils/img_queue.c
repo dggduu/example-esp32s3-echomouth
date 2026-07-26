@@ -4,7 +4,7 @@
 #include <stdio.h>
 #include <string.h>
 
-#define MAX_QUEUE_SIZE 5
+#define MAX_QUEUE_SIZE 12
 
 typedef struct {
   img_job_t jobs[MAX_QUEUE_SIZE];
@@ -13,6 +13,7 @@ typedef struct {
 } img_queue_t;
 
 static img_queue_t s_queue;
+static bool s_network_up = true;
 
 void img_queue_init(void) {
   memset(&s_queue, 0, sizeof(s_queue));
@@ -115,3 +116,7 @@ bool img_queue_is_full(void) {
   }
   return full;
 }
+
+void img_queue_set_network_up(bool up) { s_network_up = up; }
+
+bool img_queue_is_network_up(void) { return s_network_up; }

@@ -2,6 +2,8 @@
 #include "cJSON.h"
 #include "cam_helper.h"
 #include "esp_camera.h"
+#include "esp_heap_caps.h"
+#include "esp_jpeg_common.h"
 #include "esp_jpeg_enc.h"
 #include "esp_log.h"
 #include "esp_timer.h"
@@ -11,6 +13,7 @@
 #include "freertos/semphr.h"
 #include "freertos/task.h"
 #include "http_client_helper.h"
+#include "img_converters.h" // 提供 fmt2rgb888 函数
 #include "img_queue.h"
 #include "nvs_helper.h"
 #include "task_manager.h"
@@ -134,34 +137,52 @@ static void monitor_cam_frame_cb(const camera_fb_t *fb, void *user_arg) {
       ctx->captured = true;
     }
   }
-  /* 情况 B: 输出为 YUV / RGB，使用软编码编码为 JPEG */
+  /* 情况 B: 输出为 RGB565 / YUV，转为 RGB888 后调用软编码器导出 JPEG */
   else {
-    jpeg_enc_config_t cfg = DEFAULT_JPEG_ENC_CONFIG();
-    cfg.width = fb->width;
-    cfg.height = fb->height;
-    cfg.src_type = JPEG_PIXEL_FORMAT_YCbYCr;
-    cfg.quality = 50;
-    cfg.task_enable = false;
+    size_t rgb888_len = fb->width * fb->height * 3;
+    // 从 PSRAM 分配临时 RGB888 空间，避免内部 SRAM 不足
+    uint8_t *rgb888_buf =
+        (uint8_t *)heap_caps_malloc(rgb888_len, MALLOC_CAP_SPIRAM);
 
-    jpeg_enc_handle_t enc;
-    if (jpeg_enc_open(&cfg, &enc) == JPEG_ERR_OK) {
-      size_t jpg_buf_size = 80 * 1024;
-      uint8_t *jpg_buf = jpeg_calloc_align(jpg_buf_size, 16);
-      if (jpg_buf) {
-        int out_len = 0;
-        if (jpeg_enc_process(enc, fb->buf, fb->len, jpg_buf, jpg_buf_size,
-                             &out_len) == JPEG_ERR_OK &&
-            out_len > 0) {
-          ctx->jpeg_buf = (uint8_t *)malloc(out_len);
-          if (ctx->jpeg_buf) {
-            memcpy(ctx->jpeg_buf, jpg_buf, out_len);
-            ctx->jpeg_len = out_len;
-            ctx->captured = true;
+    if (rgb888_buf) {
+      // 1. 使用 fmt2rgb888 将 RGB565/YUV 统一转换为 RGB888
+      if (fmt2rgb888(fb->buf, fb->len, fb->format, rgb888_buf)) {
+        jpeg_enc_config_t cfg = DEFAULT_JPEG_ENC_CONFIG();
+        cfg.width = fb->width;
+        cfg.height = fb->height;
+        cfg.src_type =
+            JPEG_PIXEL_FORMAT_RGB888; // 符合 esp_jpeg 要求的编码输入类型
+        cfg.quality = 50;
+        cfg.task_enable = false;
+
+        jpeg_enc_handle_t enc = NULL;
+        if (jpeg_enc_open(&cfg, &enc) == JPEG_ERR_OK) {
+          size_t jpg_buf_size = 80 * 1024;
+          uint8_t *jpg_buf = (uint8_t *)jpeg_calloc_align(jpg_buf_size, 16);
+          if (jpg_buf) {
+            int out_len = 0;
+            if (jpeg_enc_process(enc, rgb888_buf, rgb888_len, jpg_buf,
+                                 jpg_buf_size, &out_len) == JPEG_ERR_OK &&
+                out_len > 0) {
+              ctx->jpeg_buf = (uint8_t *)malloc(out_len);
+              if (ctx->jpeg_buf) {
+                memcpy(ctx->jpeg_buf, jpg_buf, out_len);
+                ctx->jpeg_len = out_len;
+                ctx->captured = true;
+              }
+            }
+            jpeg_free_align(jpg_buf);
           }
+          jpeg_enc_close(enc);
+        } else {
+          ESP_LOGE(TAG, "jpeg_enc_open failed");
         }
-        jpeg_free_align(jpg_buf);
+      } else {
+        ESP_LOGE(TAG, "fmt2rgb888 convert failed");
       }
-      jpeg_enc_close(enc);
+      heap_caps_free(rgb888_buf);
+    } else {
+      ESP_LOGE(TAG, "Failed to allocate SPIRAM for RGB888 buffer");
     }
   }
 
@@ -203,10 +224,10 @@ static bool capture_and_enqueue(void) {
   }
 
   // 2. 等待摄像头回调推帧并完成编码 (超时 3 秒)
+  //    此时 face detector 已持有订阅一段时间，sensor AE/AWB 已稳定，不会偏绿
   bool wait_ok = xSemaphoreTake(capture_ctx.sem, pdMS_TO_TICKS(3000)) == pdTRUE;
 
-  // 3. 抓取完成/超时后，立刻取消订阅（让 Camera 自动进入 Standby
-  // 低功耗，减小订阅计数）
+  // 3. 抓取完成/超时后，立刻取消订阅（让 Camera 自动进入 Standby 低功耗）
   cam_helper_unsubscribe(sub_handle);
   vSemaphoreDelete(capture_ctx.sem);
 
@@ -217,7 +238,7 @@ static bool capture_and_enqueue(void) {
     return false;
   }
 
-  // 4. 将 JPEG 存入 LittleFS 文件
+  // 6. 将 JPEG 存入 LittleFS 文件
   char filepath[64];
   int64_t timestamp = esp_timer_get_time() / 1000;
   snprintf(filepath, sizeof(filepath), "/littlefs/monitor_%lld.jpg",
@@ -233,7 +254,7 @@ static bool capture_and_enqueue(void) {
   fclose(f);
   free(capture_ctx.jpeg_buf);
 
-  // 5. 提交上传任务给上传队列
+  // 7. 提交上传任务给上传队列
   img_job_t job = {
       .task_id = task_id,
       .priority = IMG_PRIORITY_LOW,
@@ -245,7 +266,16 @@ static bool capture_and_enqueue(void) {
   strlcpy(job.path, filepath, sizeof(job.path));
 
   if (!img_queue_push(&job)) {
-    ESP_LOGE(TAG, "Upload queue full, drop capture");
+    // 队列满 → 等待上传器消费后再试，避免丢弃已捕获的图片
+    ESP_LOGW(TAG, "Upload queue full, waiting for drain...");
+    for (int wait = 0; wait < 10; wait++) {
+      vTaskDelay(pdMS_TO_TICKS(1000));
+      if (img_queue_push(&job)) {
+        ESP_LOGI(TAG, "Queue drained, job enqueued after %d sec wait", wait + 1);
+        return true;
+      }
+    }
+    ESP_LOGE(TAG, "Upload queue still full after 10s, dropping capture");
     remove(filepath);
     return false;
   }
@@ -300,9 +330,6 @@ static void monitor_task_func(void *arg) {
 
   while (1) {
     if (s_is_paused) {
-      if (face_detector_helper_is_running()) {
-        face_detector_helper_stop_continuous();
-      }
       vTaskDelay(pdMS_TO_TICKS(1000));
       continue;
     }
@@ -311,7 +338,8 @@ static void monitor_task_func(void *arg) {
     if (active_task == 0) {
       if (s_state != MONITOR_STATE_IDLE) {
         ESP_LOGI(TAG, "No active task, enter IDLE");
-        if (face_detector_helper_is_running()) {
+        if (s_state == MONITOR_STATE_WAIT_FACE &&
+            face_detector_helper_is_running()) {
           face_detector_helper_stop_continuous();
         }
         s_state = MONITOR_STATE_IDLE;
@@ -345,6 +373,10 @@ static void monitor_task_func(void *arg) {
     case MONITOR_STATE_WAIT_FACE:
       if (!face_detector_helper_is_running()) {
         face_detector_helper_start_continuous();
+        // start_continuous 内部已清空旧缓存；首帧到达前 get_results 返回 count=0
+        // 这也是 camera sensor 的预热同步点：face detector 订阅了摄像头，
+        // 等它处理完首帧，sensor 的 AE/AWB 也已稳定
+        s_face_wait_start_us = esp_timer_get_time();
       }
 
       face_detect_results_t results = {0};
@@ -354,7 +386,6 @@ static void monitor_task_func(void *arg) {
         int64_t wait_sec =
             (esp_timer_get_time() - s_face_wait_start_us) / 1000000LL;
         ESP_LOGI(TAG, "Face detected after %lld sec -> CAPTURING", wait_sec);
-
         face_detector_helper_stop_continuous();
         s_state = MONITOR_STATE_CAPTURING;
       } else {

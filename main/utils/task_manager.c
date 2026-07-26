@@ -43,10 +43,10 @@ int32_t task_manager_get_active_id(void) { return s_mgr.active_task_id; }
 
 bool task_manager_fetch_list(page_todo_ctx_t *ctx) {
   char path[128];
-  snprintf(path, sizeof(path), "/device/%ld/tasks?page=%d&limit=%d",
-           s_mgr.deviceId, ctx->page, MAX_TASKS);
+  snprintf(path, sizeof(path), "/device/%d/tasks?page=%d&limit=%d",
+           (int)s_mgr.deviceId, ctx->page, MAX_TASKS);
 
-  static char json_buf[1024 * 2]; // 确保缓冲区足够
+  static char json_buf[1024 * 6]; // 服务端返回 monitorConfig 等大字段需要较大缓冲
   if (!http_get_json(path, json_buf, sizeof(json_buf)))
     return false;
 

@@ -18,30 +18,37 @@
 #define DEVICE_ID 1
 static const char *TAG = "S3_helper";
 
-#define MAX_RETRY_LIMIT 5
+#define MAX_RETRY_LIMIT 10
 #define RETRY_BACKOFF_MS 5000
+#define RETRY_BACKOFF_LONG_MS 30000
 #define UPLOADER_STACK_SIZE 6144
 
 static TaskHandle_t s_uploader_task_handle = NULL;
 static StaticTask_t s_uploader_task_tcb;
 static StackType_t *s_uploader_task_stack = NULL;
 
-#ifdef CONFIG_HTTP_MODE_MDNS
-static void rewrite_mdns_url(const char *original_url, char *out_url,
-                             size_t out_len, const char *ip) {
-  const char *mdns_host = CONFIG_SERVER_HOSTNAME ".local";
-  const char *pos = strstr(original_url, mdns_host);
-
-  if (pos && ip && strlen(ip) > 0) {
-    size_t prefix_len = pos - original_url;
-    snprintf(out_url, out_len, "%.*s%s%s", (int)prefix_len, original_url, ip,
-             pos + strlen(mdns_host));
-    ESP_LOGI(TAG, "Rewritten pre-signed URL: %s", out_url);
-  } else {
-    strlcpy(out_url, original_url, out_len);
-  }
+/**
+ * @brief 提取 URL 中的 host[:port]，用于 S3 签名 Host 覆写
+ * 例: "http://aobara-pc.local:9000/bucket/key" → "aobara-pc.local:9000"
+ */
+static bool extract_host_from_url(const char *url, char *host_out,
+                                  size_t host_len) {
+  if (!url || !host_out || host_len == 0)
+    return false;
+  const char *start = strstr(url, "://");
+  if (!start)
+    return false;
+  start += 3;
+  const char *end = strchr(start, '/');
+  if (!end)
+    return false;
+  size_t len = end - start;
+  if (len >= host_len)
+    len = host_len - 1;
+  memcpy(host_out, start, len);
+  host_out[len] = '\0';
+  return true;
 }
-#endif
 
 static void uploader_task(void *arg) {
   while (1) {
@@ -51,14 +58,20 @@ static void uploader_task(void *arg) {
       continue;
     }
 
+    // 离线等待：网络不通时不消耗重试次数，等待恢复后自动冲传
+    if (!img_queue_is_network_up()) {
+      ESP_LOGW(TAG, "Network down, waiting for recovery...");
+      vTaskDelay(pdMS_TO_TICKS(5000));
+      continue;
+    }
+
     if (job.retry_count >= MAX_RETRY_LIMIT) {
-      ESP_LOGE(TAG, "Job %s reached max retries (%d). Dropping.", job.path,
-               MAX_RETRY_LIMIT);
-      if (job.on_complete) {
-        job.on_complete(false, NULL, job.user_data);
-      }
-      remove(job.path);
-      img_queue_commit();
+      // 达到最大重试次数 → 保留文件，等待网络恢复后重新开始计数
+      ESP_LOGW(TAG, "Job %s reached max retries (%d). Holding for network recovery.",
+               job.path, MAX_RETRY_LIMIT);
+      vTaskDelay(pdMS_TO_TICKS(15000)); // 等待 15 秒，期望网络恢复
+      job.retry_count = 0;              // 重置计数器
+      img_queue_update_retry(0);
       continue;
     }
 
@@ -94,12 +107,31 @@ static void uploader_task(void *arg) {
     cJSON_Delete(root); // 及时释放 HTTP 响应的 JSON 解析树
     root = NULL;
 
+    // 提取原始 Host（用于 S3 签名匹配）
+    char original_host[64] = {0};
+    extract_host_from_url(raw_upload_url, original_host, sizeof(original_host));
+
+    // URL 改写：mDNS 主机名 → IP（esp_http_client 不支持自动 mDNS）
     char final_upload_url[512];
+    char override_host[64] = {0};
 #ifdef CONFIG_HTTP_MODE_MDNS
     char ip[32] = {0};
-    if (get_mdns_server_ip(ip, sizeof(ip))) {
-      rewrite_mdns_url(raw_upload_url, final_upload_url,
-                       sizeof(final_upload_url), ip);
+    if (get_mdns_server_ip(ip, sizeof(ip)) && original_host[0] != '\0') {
+      // 替换 URL 中的 host 为 IP
+      const char *host_start = strstr(raw_upload_url, "://");
+      if (host_start) {
+        host_start += 3;
+        const char *host_end = strchr(host_start, '/');
+        size_t prefix_len = host_start - raw_upload_url;
+        snprintf(final_upload_url, sizeof(final_upload_url), "%.*s%s%s",
+                 (int)prefix_len, raw_upload_url, ip, host_end);
+        // 覆写 Host 头为原始 mDNS 主机名，匹配 S3 预签名
+        strlcpy(override_host, original_host, sizeof(override_host));
+        ESP_LOGI(TAG, "URL rewritten: %s -> %s (Host: %s)", original_host, ip,
+                 override_host);
+      } else {
+        strlcpy(final_upload_url, raw_upload_url, sizeof(final_upload_url));
+      }
     } else {
       strlcpy(final_upload_url, raw_upload_url, sizeof(final_upload_url));
     }
@@ -128,8 +160,12 @@ static void uploader_task(void *arg) {
     fread(buf, 1, size, f);
     fclose(f);
 
-    // 3. PUT 上传 S3
-    bool put_success = http_put_binary(final_upload_url, buf, size);
+    // 3. PUT 上传 S3（Host 覆写以匹配签名）
+    // const char *host_to_use =
+    //     override_host[0] != '\0' ? override_host : NULL;
+    // bool put_success =
+    //     http_put_binary_with_host(final_upload_url, buf, size, host_to_use);
+    bool put_success = http_put_binary(raw_upload_url, buf, size);
     heap_caps_free(buf);
     if (!put_success) {
       goto fail_retry;
@@ -203,8 +239,11 @@ static void uploader_task(void *arg) {
   fail_retry:
     job.retry_count++;
     img_queue_update_retry(job.retry_count);
-    ESP_LOGW(TAG, "Job failed, retry %d/%d", job.retry_count, MAX_RETRY_LIMIT);
-    vTaskDelay(pdMS_TO_TICKS(RETRY_BACKOFF_MS));
+    // 自适应退避：前 3 次短间隔，之后长间隔等待网络恢复
+    int backoff = (job.retry_count <= 3) ? RETRY_BACKOFF_MS : RETRY_BACKOFF_LONG_MS;
+    ESP_LOGW(TAG, "Job %s failed, retry %d/%d (backoff %d ms)",
+             job.path, job.retry_count, MAX_RETRY_LIMIT, backoff);
+    vTaskDelay(pdMS_TO_TICKS(backoff));
   }
 }
 

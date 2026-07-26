@@ -112,9 +112,7 @@ static void event_handler(void *arg, esp_event_base_t event_base,
     xEventGroupSetBits(wifi_event_group, WIFI_CONNECTED_EVENT);
     is_wifi_connected = true;
 
-    // mamager 无法deinti 掉这个，首先配网后直接硬件deinit
-    // esp_bt_controller_disable();
-    // esp_bt_controller_deinit();
+    // BLE 控制器在 provisioning_task 中统一反初始化，此处仅记录日志
 
   } else if (event_base == PROTOCOMM_TRANSPORT_BLE_EVENT) {
     switch (event_id) {
@@ -165,6 +163,7 @@ static void get_device_service_name(char *service_name, size_t max) {
 }
 
 // 接收家长端的数据
+// 接收家长端的数据
 esp_err_t custom_prov_data_handler(uint32_t session_id, const uint8_t *inbuf,
                                    ssize_t inlen, uint8_t **outbuf,
                                    ssize_t *outlen, void *priv_data) {
@@ -183,13 +182,15 @@ esp_err_t custom_prov_data_handler(uint32_t session_id, const uint8_t *inbuf,
       cJSON *deviceId_obj = cJSON_GetObjectItem(root, "dId");
       cJSON *parentId_obj = cJSON_GetObjectItem(root, "pId");
 
-      if (deviceId_obj && cJSON_IsString(deviceId_obj) && parentId_obj &&
-          cJSON_IsString(parentId_obj)) {
+      // 【关键修改点】使用 cJSON_IsNumber 判断数字类型
+      if (deviceId_obj && cJSON_IsNumber(deviceId_obj) && parentId_obj &&
+          cJSON_IsNumber(parentId_obj)) {
 
         int32_t device_id = (int32_t)deviceId_obj->valueint;
         int32_t parent_id = (int32_t)parentId_obj->valueint;
 
-        ESP_LOGI(TAG, "deviceId: %d, parentId: %d", device_id, parent_id);
+        ESP_LOGI(TAG, "deviceId: %" PRId32 ", parentId: %" PRId32, device_id,
+                 parent_id);
 
         // 存储到 NVS
         nvs_handle_t nvs_handle;
@@ -198,9 +199,11 @@ esp_err_t custom_prov_data_handler(uint32_t session_id, const uint8_t *inbuf,
           ret = nvs_set_i32(nvs_handle, "device_id", device_id);
           if (ret != ESP_OK)
             ESP_LOGE(TAG, "Failed to set device_id: %s", esp_err_to_name(ret));
+
           ret = nvs_set_i32(nvs_handle, "parent_id", parent_id);
           if (ret != ESP_OK)
             ESP_LOGE(TAG, "Failed to set parent_id: %s", esp_err_to_name(ret));
+
           nvs_commit(nvs_handle);
           nvs_close(nvs_handle);
         } else {
@@ -223,7 +226,7 @@ esp_err_t custom_prov_data_handler(uint32_t session_id, const uint8_t *inbuf,
     ESP_LOGE(TAG, "System out of memory");
     return ESP_ERR_NO_MEM;
   }
-  *outlen = strlen(response) + 1;
+  *outlen = strlen(response);
   return ESP_OK;
 }
 
@@ -344,16 +347,24 @@ static void provisioning_task(void *arg) {
 
     wifi_prov_mgr_endpoint_register("custom-data", custom_prov_data_handler,
                                     NULL);
-
+    vTaskDelay(pdMS_TO_TICKS(300));
     // 异步显示二维码
     wifi_prov_print_qr(service_name, username, pop, PROV_TRANSPORT_BLE);
-
-    vTaskDelay(pdMS_TO_TICKS(500));
 
     xEventGroupWaitBits(wifi_event_group, WIFI_CONNECTED_EVENT, true, true,
                         portMAX_DELAY);
 
     xEventGroupSetBits(wifi_event_group, PROV_RENDER_STOP_BIT);
+
+    /* 配网完成，停止 BLE 服务 */
+    wifi_prov_mgr_stop_provisioning();
+    vTaskDelay(pdMS_TO_TICKS(500));
+
+    /* 反初始化 BLE 控制器，释放 DRAM */
+    esp_bt_controller_disable();
+    esp_bt_controller_deinit();
+    esp_bt_controller_mem_release(ESP_BT_MODE_BLE);
+    ESP_LOGI(TAG, "BLE controller deinitialized");
 
   } else {
     ESP_LOGI(TAG, "Already provisioned, starting Wi-Fi STA");
@@ -367,7 +378,6 @@ static void provisioning_task(void *arg) {
                         portMAX_DELAY);
   }
   ESP_LOGI(TAG, "Provisioning task completed");
-  ESP_LOGI(TAG, "Already provisioned, starting Wi-Fi STA");
 
   // 任务结束，自行删除
   vTaskDelete(NULL);

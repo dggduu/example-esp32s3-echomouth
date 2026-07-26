@@ -118,7 +118,7 @@ esp_err_t bsp_camera_init(uint32_t xclk_freq_hz, pixformat_t pixel_format,
       .jpeg_quality = 12,
       .fb_count = fb_count,
       .fb_location = CAMERA_FB_IN_PSRAM,
-      .grab_mode = CAMERA_GRAB_WHEN_EMPTY,
+      .grab_mode = CAMERA_GRAB_LATEST,
   };
 
   esp_err_t ret = esp_camera_init(&config);

@@ -58,7 +58,7 @@ endif()
 
 target_compile_options(${COMPONENT_LIB} PRIVATE -Wno-unused-const-variable)
 
-#
+
 # ULP support additions to component CMakeLists.txt.
 #
 # 1. The ULP app name must be unique (if multiple components use ULP).
@@ -72,7 +72,7 @@ set(ulp_riscv_sources "ulp/main.c")
 #
 # 3. List all the component source files which include automatically
 #    generated ULP export file, ${ulp_app_name}.h:
-set(ulp_exp_dep_srcs "sys_main.c")
+set(ulp_exp_dep_srcs "sys_main.c" "utils/power_manager.c")
 
 #
 # 4. Call function to build ULP binary and embed in project using the argument

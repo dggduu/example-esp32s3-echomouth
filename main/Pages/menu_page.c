@@ -23,10 +23,15 @@ static void menu_item_click_cb(lv_event_t *e) {
   } else if (strcmp(txt, "DEBUG") == 0) {
     gs_nav_push(&page_debug, NULL);
   } else if (strcmp(txt, "TODO") == 0) {
-    int device_id = nvs_helper_get_did();
-    if (device_id == -1)
+    int did = nvs_helper_get_did();
+    if (did == -1)
       return;
-    gs_nav_push_async(&page_todo, &device_id);
+    // device_id 必须用堆分配，因为 gs_nav_push_async 是延迟回调
+    int32_t *p_did = malloc(sizeof(int32_t));
+    if (!p_did)
+      return;
+    *p_did = did;
+    gs_nav_push_async(&page_todo, p_did);
   }
 }
 

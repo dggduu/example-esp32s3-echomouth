@@ -8,6 +8,7 @@
 #include "freertos/semphr.h"
 #include "freertos/task.h"
 #include "gs_portal.h"
+#include "img_queue.h"
 #include "protocol.h"
 #include <string.h>
 
@@ -61,12 +62,15 @@ static void default_status_callback(net_status_t status, const char *msg) {
   switch (status) {
   case NET_STATUS_CONNECTED:
     gs_toast_show(msg, GS_TOAST_SUCCESS);
+    img_queue_set_network_up(true);
     break;
   case NET_STATUS_DISCONNECTED:
     gs_toast_show(msg, GS_TOAST_FAILED);
+    img_queue_set_network_up(false);
     break;
   case NET_STATUS_RECONNECTING:
     gs_toast_show(msg, GS_TOAST_INFO);
+    img_queue_set_network_up(false);
     break;
   default:
     break;

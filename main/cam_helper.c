@@ -125,7 +125,7 @@ esp_err_t cam_helper_init(const cam_helper_config_t *config) {
   s_sub_count = 0;
   s_hw_powered = false;
 
-  xTaskCreatePinnedToCore(cam_capture_task, "cam_cap", 3584, NULL, 4,
+  xTaskCreatePinnedToCore(cam_capture_task, "cam_cap", 6144, NULL, 4,
                           &s_capture_task_handle, 1);
 
   s_helper_inited = true;

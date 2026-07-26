@@ -1,13 +1,17 @@
 #include "StyleSheet.h"
 #include "cam_helper.h"
+#include "core/lv_obj_pos.h"
 #include "esp_log.h"
 #include "esp_lvgl_port.h"
 #include "gs_nav.h"
 #include "gs_portal.h"
 #include "lvgl.h"
+#include "misc/lv_area.h"
 #include "misc/lv_color.h"
 #include <inttypes.h>
 #include <string.h>
+
+#include "ui_circle_utils.h"
 
 static const char *TAG = "PAGE_CAM_TEST";
 
@@ -125,7 +129,7 @@ static lv_obj_t *page_cam_test_render(lv_obj_t *parent, void *ctx_ptr) {
   lv_obj_set_size(root, LV_PCT(100), LV_PCT(100));
   lv_obj_set_flex_flow(root, LV_FLEX_FLOW_COLUMN);
   lv_obj_set_style_pad_all(root, 0, 0);
-  lv_obj_set_style_bg_color(root, lv_color_hex(0x121212), 0);
+  lv_obj_set_style_bg_color(root, lv_color_hex(0xffffff), 0);
   lv_obj_clear_flag(root, LV_OBJ_FLAG_SCROLLABLE);
 
   /* Header 顶部栏 */
@@ -138,19 +142,11 @@ static lv_obj_t *page_cam_test_render(lv_obj_t *parent, void *ctx_ptr) {
   lv_obj_set_style_border_width(top_bar, 0, 0);
   lv_obj_set_style_pad_hor(top_bar, 12, 0);
 
-  lv_obj_t *back_btn = lv_btn_create(top_bar);
-  lv_obj_set_size(back_btn, 32, 32);
-  lv_obj_set_style_radius(back_btn, LV_RADIUS_CIRCLE, 0);
-  lv_obj_set_style_bg_color(back_btn, S_COLOR_SURFACE_MID, 0);
-  lv_obj_t *back_label = lv_label_create(back_btn);
-  lv_label_set_text(back_label, LV_SYMBOL_LEFT);
-  lv_obj_center(back_label);
-  lv_obj_add_event_cb(back_btn, btn_back_click_event, LV_EVENT_CLICKED, NULL);
-
   lv_obj_t *title = lv_label_create(top_bar);
-  lv_label_set_text(title, "Camera Live Test");
+  lv_label_set_text(title, "摄像头测试");
   lv_obj_set_style_text_color(title, S_TEXT_PRIMARY, 0);
-  lv_obj_set_style_margin_left(title, 10, 0);
+  // lv_obj_set_style_margin_left(title, 10, 0);
+  lv_obj_align(title, LV_ALIGN_CENTER, 0, 0);
 
   /* 主预览区 */
   lv_obj_t *main_cont = lv_obj_create(root);
@@ -172,6 +168,8 @@ static lv_obj_t *page_cam_test_render(lv_obj_t *parent, void *ctx_ptr) {
   lv_label_set_text(ctx->lbl_status, "等待帧接收中...");
   lv_obj_set_style_text_color(ctx->lbl_status, S_TEXT_SECONDARY, 0);
   lv_obj_set_style_margin_top(ctx->lbl_status, 6, 0);
+
+  ui_circle_add_exit_btn(root, btn_back_click_event);
 
   return root;
 }

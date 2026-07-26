@@ -240,7 +240,7 @@ esp_err_t bsp_lcd_power_up(void) {
   /* 背光 */
   bsp_lcd_backlight_low();
 
-  bsp_i2c_scan(bsp_i2c_get_main_handle());
+  // bsp_i2c_scan(bsp_i2c_get_main_handle());
   ESP_LOGI(TAG, "LCD Power Up Done");
   return ESP_OK;
 }
@@ -281,7 +281,7 @@ esp_err_t bsp_lcd_init(esp_lcd_panel_handle_t *panel,
       .miso_io_num = BSP_LCD_DATA1,
       .quadwp_io_num = BSP_LCD_DATA2,
       .quadhd_io_num = BSP_LCD_DATA3,
-      .max_transfer_sz = BSP_LCD_H_RES * 80 * sizeof(uint16_t),
+      .max_transfer_sz = BSP_LCD_H_RES * 20 * sizeof(uint16_t),
   };
 
   ESP_ERROR_CHECK(spi_bus_initialize(BSP_LCD_HOST, &buscfg, SPI_DMA_CH_AUTO));
@@ -295,7 +295,7 @@ esp_err_t bsp_lcd_init(esp_lcd_panel_handle_t *panel,
 
       .pclk_hz = LCD_PIXEL_CLOCK_HZ,
 
-      .trans_queue_depth = 10,
+      .trans_queue_depth = 4,
 
       .lcd_cmd_bits = 32,
       .lcd_param_bits = 8,
@@ -470,7 +470,9 @@ esp_err_t bsp_lcd_rgb_test(esp_lcd_panel_handle_t panel) {
 
 esp_err_t bsp_lvgl_init(esp_lcd_panel_handle_t panel,
                         esp_lcd_touch_handle_t touch) {
-  const lvgl_port_cfg_t lvgl_cfg = ESP_LVGL_PORT_INIT_CONFIG();
+  lvgl_port_cfg_t lvgl_cfg = ESP_LVGL_PORT_INIT_CONFIG();
+  lvgl_cfg.task_stack =
+      16384; // Increase from default 7168 — needed for scaled image rendering
   ESP_ERROR_CHECK(lvgl_port_init(&lvgl_cfg));
 
   /* -------- Display -------- */
@@ -478,7 +480,8 @@ esp_err_t bsp_lvgl_init(esp_lcd_panel_handle_t panel,
       .io_handle = s_io_handle,
       .panel_handle = panel,
       .control_handle = NULL,
-      .buffer_size = BSP_LCD_H_RES * 5,
+      .buffer_size = BSP_LCD_H_RES *
+                     20, // 7200px (~14.4KB) — larger tiles = fewer DMA txns
       .double_buffer = false,
       .hres = BSP_LCD_H_RES,
       .vres = BSP_LCD_V_RES,
@@ -492,8 +495,9 @@ esp_err_t bsp_lvgl_init(esp_lcd_panel_handle_t panel,
           },
       .flags =
           {
-              .buff_dma = false,
-              .buff_spiram = true,
+              .buff_dma = true,
+              .buff_spiram = false, // Internal DRAM avoids PSRAM DMA cache
+                                    // coherency issues
           },
   };
 
