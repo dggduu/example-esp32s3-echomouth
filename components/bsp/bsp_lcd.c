@@ -550,4 +550,39 @@ esp_err_t bsp_lcd_touch_deinit(void) {
   ESP_LOGI(TAG, "LCD Touch & TP_IO successfully de-initialized");
   return ESP_OK;
 }
+
+esp_err_t bsp_lcd_tp_power_cycle(void) {
+  ESP_LOGI(TAG, "Performing Full Hardware Power Cycle for LCD & Touch...");
+
+  // 1. 关闭背光
+  bsp_lcd_power_low(); // 开启电源
+  bsp_lcd_backlight_set(false);
+  // 5. 拉一次 TP_RST (硬件复位脉冲)
+  bsp_lcd_touch_reset_low();
+  vTaskDelay(pdMS_TO_TICKS(10));
+  bsp_lcd_touch_reset_high();
+  vTaskDelay(pdMS_TO_TICKS(50)); // 等待 Touch IC 内部 Boot 完成
+
+  bsp_lcd_touch_deinit();
+  // 2. 禁能所有数据/控制 GPIO，防止倒灌电
+  const gpio_num_t pins_to_disable[] = {BSP_LCD_SCLK,  BSP_LCD_DATA0,
+                                        BSP_LCD_DATA1, BSP_LCD_DATA2,
+                                        BSP_LCD_DATA3, BSP_TOUCH_INT};
+  for (int i = 0; i < sizeof(pins_to_disable) / sizeof(pins_to_disable[0]);
+       i++) {
+    if (pins_to_disable[i] >= 0) {
+      gpio_reset_pin(pins_to_disable[i]);
+      gpio_set_direction(pins_to_disable[i], GPIO_MODE_DISABLE);
+    }
+  }
+  // LCD 真正硬件复位
+  bsp_pca9539_set_pin_level(BSP_IOEXP_LCD_RST, 0);
+  vTaskDelay(pdMS_TO_TICKS(20));
+
+  bsp_pca9539_set_pin_level(BSP_IOEXP_LCD_RST, 1);
+  vTaskDelay(pdMS_TO_TICKS(120));
+
+  ESP_LOGI(TAG, "Power Cycle Complete.");
+  return ESP_OK;
+}
 lv_indev_t *bsp_lcd_get_touch_indev(void) { return touch_indev; }

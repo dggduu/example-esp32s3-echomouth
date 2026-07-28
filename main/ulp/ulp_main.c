@@ -120,7 +120,8 @@ int main(void) {
   uint8_t finger_num = 0;
 
   // 尝试读取 CST816S 寄存器 0x02 (手指数量)
-  bool success = soft_cst816s_read_reg(REG_FINGER_NUM, &finger_num);
+  bool success = 0;
+  success = soft_cst816s_read_reg(REG_FINGER_NUM, &finger_num);
 
   // 如果成功读取且检测到有手指按下 (finger_num > 0)
   if (success && (finger_num > 0)) {

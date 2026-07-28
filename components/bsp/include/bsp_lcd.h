@@ -35,6 +35,7 @@ esp_err_t bsp_lvgl_init(esp_lcd_panel_handle_t panel,
                         esp_lcd_touch_handle_t touch);
 lv_indev_t *bsp_lcd_get_touch_indev(void);
 esp_err_t bsp_lcd_touch_deinit(void);
+esp_err_t bsp_lcd_tp_power_cycle(void);
 #ifdef __cplusplus
 }
 #endif

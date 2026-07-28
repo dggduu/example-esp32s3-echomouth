@@ -181,50 +181,28 @@ void power_manager_report_activity(void) {
 void power_manager_enter_deep_sleep(void) {
   ESP_LOGI(TAG, "Preparing for Deep Sleep (ULP Soft-I2C touch wake)...");
 
-  // 1. 外设断电 & 保障屏幕/触摸供电
   bsp_pa_power_off();
   bsp_camera_power_down();
   bsp_audio_power_off();
-  bsp_lcd_backlight_set(false);
-  bsp_lcd_power_up();
 
-  bsp_lcd_backlight_set(false);
-
-  // 2. 硬件复位 CST816S 清除卡死
-  ESP_LOGI(TAG, "Resetting CST816S via PCA9539...");
-  bsp_lcd_touch_reset_low();
-  vTaskDelay(pdMS_TO_TICKS(20));
-  bsp_lcd_touch_reset_high();
-  vTaskDelay(pdMS_TO_TICKS(50));
-
-  // 3. 注销主 CPU 的触摸驱动与硬件 I2C
-  bsp_lcd_touch_deinit();
+  bsp_lcd_tp_power_cycle();
   ESP_LOGI(TAG, "De-initializing hardware I2C bus...");
   bsp_i2c_deinit_main();
 
-  // 4. 【核心切换】配置 GPIO5(SCL) / GPIO6(SDA) 为 RTC 开漏模式
   ESP_LOGI(TAG, "Configuring RTC GPIOs (SDA=6, SCL=5) for ULP Soft-I2C...");
   rtc_gpio_init(GPIO_NUM_5);
   rtc_gpio_init(GPIO_NUM_6);
 
-  // I2C 必须使用 INPUT_OUTPUT_OD (开漏输入输出) 模式
   rtc_gpio_set_direction(GPIO_NUM_5, RTC_GPIO_MODE_INPUT_OUTPUT_OD);
   rtc_gpio_set_direction(GPIO_NUM_6, RTC_GPIO_MODE_INPUT_OUTPUT_OD);
 
-  // 开启芯片内部上拉（配合板载外部上拉，增强信号抗干扰）
-  rtc_gpio_pullup_en(GPIO_NUM_5);
-  rtc_gpio_pullup_en(GPIO_NUM_6);
   ESP_ERROR_CHECK(esp_sleep_enable_ulp_wakeup());
-  // 5. 加载 ULP 程序
-  ESP_LOGI(TAG, "Loading ULP touch-polling program...");
   esp_err_t err = ulp_riscv_load_binary(
       ulp_main_bin_start, (ulp_main_bin_end - ulp_main_bin_start));
   ESP_ERROR_CHECK(err);
 
-  // 每 20ms 唤醒 ULP 轮询一次触控（20000 us）
   ulp_set_wakeup_period(0, 4 * 1000 * 1000);
 
-  // 6. 启动 ULP 并进入 Deep Sleep
   ESP_LOGI(TAG, "Starting ULP and entering Deep Sleep...");
   err = ulp_riscv_run();
   ESP_ERROR_CHECK(err);
@@ -235,7 +213,6 @@ void power_manager_enter_deep_sleep(void) {
   ESP_LOGI(TAG,
            "Deep sleep started — ULP polling CST816S via Soft-I2C every 20ms");
 
-  // 留给串口 10ms 缓冲区将最后一行 LOG 打印完整
   vTaskDelay(pdMS_TO_TICKS(10));
   esp_deep_sleep_start();
 }

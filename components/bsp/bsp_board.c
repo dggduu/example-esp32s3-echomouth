@@ -92,7 +92,7 @@ esp_err_t bsp_board_power_off_and_deinit_all(void) {
 esp_err_t bsp_board_power_off_all(void) {
   bsp_cam_power_off();
   bsp_audio_power_off();
-  // bsp_screen_power_off();
+  bsp_lcd_power_down();
   return ESP_OK;
 }
 
