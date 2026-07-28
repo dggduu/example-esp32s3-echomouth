@@ -15,4 +15,5 @@ idf_component_register(
         json
         lvgl
         esp_websocket_client main
+        bsp
 )

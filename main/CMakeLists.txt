@@ -27,6 +27,7 @@ list(APPEND main_srcs
     "utils/ota_backend.c"
     "utils/nvs_helper.c"
     "utils/face_detector_helper.cc"
+    "utils/mdns_helper"
     "utils/task_manager.c"
     "utils/monitor_mamager.c"
     "utils/aes_crypto_helper.c"

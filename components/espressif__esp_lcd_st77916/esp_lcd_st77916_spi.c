@@ -45,6 +45,7 @@ static esp_err_t panel_st77916_swap_xy(esp_lcd_panel_t *panel, bool swap_axes);
 static esp_err_t panel_st77916_set_gap(esp_lcd_panel_t *panel, int x_gap,
                                        int y_gap);
 static esp_err_t panel_st77916_disp_on_off(esp_lcd_panel_t *panel, bool off);
+static esp_err_t panel_st77916_sleep(esp_lcd_panel_t *panel, bool sleep);
 
 typedef struct {
   esp_lcd_panel_t base;
@@ -134,6 +135,7 @@ esp_err_t esp_lcd_new_panel_st77916_spi(
   st77916->base.mirror = panel_st77916_mirror;
   st77916->base.swap_xy = panel_st77916_swap_xy;
   st77916->base.disp_on_off = panel_st77916_disp_on_off;
+  st77916->base.disp_sleep = panel_st77916_sleep;
   *ret_panel = &(st77916->base);
   ESP_LOGD(TAG, "new st77916 panel @%p", st77916);
 
@@ -623,5 +625,21 @@ static esp_err_t panel_st77916_disp_on_off(esp_lcd_panel_t *panel,
   }
   ESP_RETURN_ON_ERROR(tx_param(st77916, io, command, NULL, 0), TAG,
                       "send command failed");
+  return ESP_OK;
+}
+
+static esp_err_t panel_st77916_sleep(esp_lcd_panel_t *panel, bool sleep) {
+  st77916_panel_t *st77916 = __containerof(panel, st77916_panel_t, base);
+  esp_lcd_panel_io_handle_t io = st77916->io;
+
+  if (sleep) {
+    ESP_RETURN_ON_ERROR(tx_param(st77916, io, LCD_CMD_SLPIN, NULL, 0), TAG,
+                        "SLPIN failed");
+    vTaskDelay(pdMS_TO_TICKS(5));
+  } else {
+    ESP_RETURN_ON_ERROR(tx_param(st77916, io, LCD_CMD_SLPOUT, NULL, 0), TAG,
+                        "SLPOUT failed");
+    vTaskDelay(pdMS_TO_TICKS(120));
+  }
   return ESP_OK;
 }

@@ -1,9 +1,9 @@
 #include "gs_qrcode_comp.h"
+#include "esp_heap_caps.h" // 引入 ESP-IDF 堆内存管理头文件
 #include "esp_log.h"
 #include "string.h"
 #include <stdlib.h>
-/* Only one QR component is active at a time (wifi provisioning screen).
-   Use a simple global pointer — the QR task runs serially. */
+
 static struct {
   lv_obj_t *root;
   lv_obj_t *qr_obj;
@@ -17,15 +17,23 @@ lv_obj_t *gs_qrcode_comp_create(lv_obj_t *parent, const gs_qr_config_t *cfg) {
   if (!parent || !cfg)
     return NULL;
 
-  /* free previous if any */
+  /* 1. 释放上一次的结构体 */
   if (s_qr) {
-    free(s_qr);
+    heap_caps_free(s_qr); // 匹配 heap_caps_calloc
     s_qr = NULL;
   }
 
-  s_qr = calloc(1, sizeof(*s_qr));
-  if (!s_qr)
-    return NULL;
+  /* 2. 【关键修改】强制将 s_qr 结构体分配在 PSRAM (SPIRAM) 中，绝不抢占内部
+   * DRAM */
+  s_qr =
+      heap_caps_calloc(1, sizeof(*s_qr), MALLOC_CAP_SPIRAM | MALLOC_CAP_8BIT);
+  if (!s_qr) {
+    // 如果 PSRAM 没挂载成功，退回普通 calloc
+    s_qr = calloc(1, sizeof(*s_qr));
+    if (!s_qr)
+      return NULL;
+  }
+
   s_qr->cfg = *cfg;
   s_qr->current_status = GS_QR_WAITED;
 

@@ -448,6 +448,40 @@ static void monitor_task_func(void *arg) {
   }
 }
 
+void monitor_task_force_capture(bool skip_face) {
+  if (s_is_paused) {
+    ESP_LOGW(TAG, "Monitor is paused, cannot force capture");
+    return;
+  }
+
+  xSemaphoreTake(s_monitor_mutex, portMAX_DELAY);
+
+  monitor_state_t prev_state = s_state;
+  int64_t prev_wake = s_next_wake_time_us;
+  int prev_interval = s_current_interval_sec;
+
+  if (skip_face) {
+    ESP_LOGI(TAG, "Force capture (skip face) -> CAPTURING, prev_state=%d", prev_state);
+    s_state = MONITOR_STATE_CAPTURING;
+  } else {
+    ESP_LOGI(TAG, "Force capture (with face) -> WAIT_FACE, prev_state=%d", prev_state);
+    // Stop face detector if running so it starts fresh
+    if (face_detector_helper_is_running()) {
+      face_detector_helper_stop_continuous();
+    }
+    s_state = MONITOR_STATE_WAIT_FACE;
+    s_face_wait_start_us = esp_timer_get_time();
+  }
+
+  // Reset interval so next normal cycle starts from min
+  s_current_interval_sec = INTERVAL_MIN_SEC;
+
+  xSemaphoreGive(s_monitor_mutex);
+  (void)prev_state;
+  (void)prev_wake;
+  (void)prev_interval;
+}
+
 void monitor_task_start(void) {
   if (!s_upload_done_sem)
     s_upload_done_sem = xSemaphoreCreateBinary();

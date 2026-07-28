@@ -23,6 +23,11 @@
 #include "prov_qr.h"
 #include "prov_sec2_gen.h"
 #include "wifi_prov.h"
+
+#include "esp_bt.h"
+#include "esp_nimble_hci.h"
+#include "nimble/nimble_port.h"
+
 static const char *TAG = "wifi_prov";
 #define CONFIG_EXAMPLE_PROV_SECURITY_VERSION_2
 #define CONFIG_EXAMPLE_PROV_SEC2_DEV_MODE
@@ -36,7 +41,7 @@ bool is_wifi_connected = false;
 
 static esp_err_t example_get_sec2_salt(const char **salt, uint16_t *salt_len) {
   ESP_LOGI(TAG, "Development mode: dynamically generating salt");
-  return prov_sec2_get_salt(salt, salt_len); // 返回 16 字节的 salt
+  return prov_sec2_get_salt(salt, salt_len);
 }
 
 static esp_err_t example_get_sec2_verifier(const char **verifier,
@@ -83,12 +88,13 @@ static void event_handler(void *arg, esp_event_base_t event_base,
       break;
     }
     case WIFI_PROV_CRED_SUCCESS:
-      ESP_LOGI(TAG, "Provisioning successful");
-
+      ESP_LOGI(TAG, ">>> WIFI_PROV_CRED_SUCCESS triggered");
       prov_qr_set_status(GS_QR_SUCCESS);
       break;
     case WIFI_PROV_END:
-      wifi_prov_mgr_deinit();
+      // 不在事件回调中调用 deinit，由 provisioning_task 统一清理
+      ESP_LOGI(TAG,
+               ">>> WIFI_PROV_END event received (deinit handled in task)");
       break;
     default:
       break;
@@ -107,13 +113,10 @@ static void event_handler(void *arg, esp_event_base_t event_base,
     }
   } else if (event_base == IP_EVENT && event_id == IP_EVENT_STA_GOT_IP) {
     ip_event_got_ip_t *event = (ip_event_got_ip_t *)event_data;
-    ESP_LOGI(TAG, "Connected with IP Address:" IPSTR,
-             IP2STR(&event->ip_info.ip));
+    ESP_LOGI(TAG, ">>> GOT IP: " IPSTR, IP2STR(&event->ip_info.ip));
     xEventGroupSetBits(wifi_event_group, WIFI_CONNECTED_EVENT);
     is_wifi_connected = true;
-
-    // BLE 控制器在 provisioning_task 中统一反初始化，此处仅记录日志
-
+    ESP_LOGI(TAG, ">>> WIFI_CONNECTED_EVENT bit set");
   } else if (event_base == PROTOCOMM_TRANSPORT_BLE_EVENT) {
     switch (event_id) {
     case PROTOCOMM_TRANSPORT_BLE_CONNECTED:
@@ -133,13 +136,11 @@ static void event_handler(void *arg, esp_event_base_t event_base,
     case PROTOCOMM_SECURITY_SESSION_INVALID_SECURITY_PARAMS:
       ESP_LOGE(TAG, "Received invalid security parameters for establishing "
                     "secure session!");
-
       prov_qr_set_status(GS_QR_FAILED);
       break;
     case PROTOCOMM_SECURITY_SESSION_CREDENTIALS_MISMATCH:
       ESP_LOGE(TAG, "Received incorrect username and/or PoP for establishing "
                     "secure session!");
-
       prov_qr_set_status(GS_QR_FAILED);
       break;
     default:
@@ -163,7 +164,6 @@ static void get_device_service_name(char *service_name, size_t max) {
 }
 
 // 接收家长端的数据
-// 接收家长端的数据
 esp_err_t custom_prov_data_handler(uint32_t session_id, const uint8_t *inbuf,
                                    ssize_t inlen, uint8_t **outbuf,
                                    ssize_t *outlen, void *priv_data) {
@@ -173,7 +173,6 @@ esp_err_t custom_prov_data_handler(uint32_t session_id, const uint8_t *inbuf,
   if (inbuf && inlen > 0) {
     ESP_LOGI(TAG, "Received data: %.*s", inlen, (char *)inbuf);
 
-    // 解析 JSON
     cJSON *root = cJSON_Parse((const char *)inbuf);
     if (root == NULL) {
       ESP_LOGE(TAG, "JSON parse error");
@@ -182,7 +181,6 @@ esp_err_t custom_prov_data_handler(uint32_t session_id, const uint8_t *inbuf,
       cJSON *deviceId_obj = cJSON_GetObjectItem(root, "dId");
       cJSON *parentId_obj = cJSON_GetObjectItem(root, "pId");
 
-      // 【关键修改点】使用 cJSON_IsNumber 判断数字类型
       if (deviceId_obj && cJSON_IsNumber(deviceId_obj) && parentId_obj &&
           cJSON_IsNumber(parentId_obj)) {
 
@@ -192,7 +190,6 @@ esp_err_t custom_prov_data_handler(uint32_t session_id, const uint8_t *inbuf,
         ESP_LOGI(TAG, "deviceId: %" PRId32 ", parentId: %" PRId32, device_id,
                  parent_id);
 
-        // 存储到 NVS
         nvs_handle_t nvs_handle;
         ret = nvs_open("storage", NVS_READWRITE, &nvs_handle);
         if (ret == ESP_OK) {
@@ -227,6 +224,7 @@ esp_err_t custom_prov_data_handler(uint32_t session_id, const uint8_t *inbuf,
     return ESP_ERR_NO_MEM;
   }
   *outlen = strlen(response);
+  ESP_LOGI(TAG, ">>> custom_prov_data_handler: response = %s", response);
   return ESP_OK;
 }
 
@@ -256,26 +254,17 @@ void wifi_prov_reset_state() {
 }
 
 void wifi_prov_nvs_init() {
-  /* Initialize NVS partition */
   esp_err_t ret = nvs_flash_init();
   if (ret == ESP_ERR_NVS_NO_FREE_PAGES ||
       ret == ESP_ERR_NVS_NEW_VERSION_FOUND) {
-    /* NVS partition was truncated
-     * and needs to be erased */
     ESP_ERROR_CHECK(nvs_flash_erase());
-
-    /* Retry nvs_flash_init */
     ESP_ERROR_CHECK(nvs_flash_init());
   }
-
-  /* Initialize TCP/IP */
   ESP_ERROR_CHECK(esp_netif_init());
 }
 
 #define PROV_RENDER_STOP_BIT BIT1
-
-// 定义在头文件或全局中
-#define PROV_FINISH_BIT BIT0
+#define PROV_FINISH_BIT BIT2
 
 extern QueueHandle_t s_qr_queue;
 
@@ -294,8 +283,6 @@ void qr_render_task(void *arg) {
     vTaskDelay(pdMS_TO_TICKS(20));
   }
 
-  gs_nav_pop();
-
   vQueueDelete(s_qr_queue);
   s_qr_queue = NULL;
 
@@ -304,8 +291,9 @@ void qr_render_task(void *arg) {
 }
 
 bool provisioned = false;
+
 static void provisioning_task(void *arg) {
-  // 检测是否已配网
+  bool provisioned = false;
 
   ESP_ERROR_CHECK(wifi_prov_mgr_is_provisioned(&provisioned));
 
@@ -314,72 +302,89 @@ static void provisioning_task(void *arg) {
   if (!provisioned) {
     ESP_LOGI(TAG, "Starting provisioning");
 
-    xEventGroupClearBits(wifi_event_group, PROV_RENDER_STOP_BIT);
+    xEventGroupClearBits(wifi_event_group,
+                         PROV_FINISH_BIT | PROV_RENDER_STOP_BIT);
     xTaskCreate(qr_render_task, "qr_render", 4096, NULL, 4, NULL);
-    // 生成设备名称
     char service_name[14] = "Project_swan";
-    // get_device_service_name(service_name, sizeof(service_name));
 
     wifi_prov_security_t security = WIFI_PROV_SECURITY_2;
+
     const char *username = EXAMPLE_PROV_SEC2_USERNAME;
     const char *pop = EXAMPLE_PROV_SEC2_PWD;
 
-    // 获取 salt/verifier
     wifi_prov_security2_params_t sec2_params = {};
+
     ESP_ERROR_CHECK(
         example_get_sec2_salt(&sec2_params.salt, &sec2_params.salt_len));
+
     ESP_ERROR_CHECK(example_get_sec2_verifier(&sec2_params.verifier,
                                               &sec2_params.verifier_len));
 
-    // 自定义 UUID
     uint8_t custom_service_uuid[] = {
         0xb4, 0xdf, 0x5a, 0x1c, 0x3f, 0x6b, 0xf4, 0xbf,
         0xea, 0x4a, 0x82, 0x03, 0x04, 0x90, 0x1a, 0x02,
     };
-    wifi_prov_scheme_ble_set_service_uuid(custom_service_uuid);
 
-    // 创建自定义 endpoint
-    wifi_prov_mgr_endpoint_create("custom-data");
+    ESP_ERROR_CHECK(wifi_prov_scheme_ble_set_service_uuid(custom_service_uuid));
 
-    // 启动 provisioning
+    ESP_ERROR_CHECK(wifi_prov_mgr_endpoint_create("custom-data"));
+
     ESP_ERROR_CHECK(wifi_prov_mgr_start_provisioning(
         security, (const void *)&sec2_params, service_name, NULL));
 
-    wifi_prov_mgr_endpoint_register("custom-data", custom_prov_data_handler,
-                                    NULL);
-    vTaskDelay(pdMS_TO_TICKS(300));
-    // 异步显示二维码
+    ESP_LOGI(TAG, "Provisioning started");
+
+    ESP_ERROR_CHECK(wifi_prov_mgr_endpoint_register(
+        "custom-data", custom_prov_data_handler, NULL));
+
     wifi_prov_print_qr(service_name, username, pop, PROV_TRANSPORT_BLE);
 
-    xEventGroupWaitBits(wifi_event_group, WIFI_CONNECTED_EVENT, true, true,
+    ESP_LOGI(TAG, "Waiting for WiFi GOT_IP...");
+
+    xEventGroupWaitBits(wifi_event_group, WIFI_CONNECTED_EVENT, pdFALSE, pdTRUE,
                         portMAX_DELAY);
+    ESP_LOGI(TAG, ">>> provisioning_task: received WIFI_CONNECTED_EVENT");
 
     xEventGroupSetBits(wifi_event_group, PROV_RENDER_STOP_BIT);
+    ESP_LOGI(TAG, ">>> provisioning_task: PROV_RENDER_STOP_BIT set");
 
-    /* 配网完成，停止 BLE 服务 */
-    wifi_prov_mgr_stop_provisioning();
-    vTaskDelay(pdMS_TO_TICKS(500));
+    // 等待 3 秒，确保手机端 provision() 完成
+    ESP_LOGI(TAG, ">>> provisioning_task: waiting 3s before deinit...");
+    vTaskDelay(pdMS_TO_TICKS(3000));
+    ESP_LOGI(
+        TAG,
+        ">>> provisioning_task: delay done, calling wifi_prov_mgr_deinit()");
 
-    /* 反初始化 BLE 控制器，释放 DRAM */
-    esp_bt_controller_disable();
-    esp_bt_controller_deinit();
-    esp_bt_controller_mem_release(ESP_BT_MODE_BLE);
-    ESP_LOGI(TAG, "BLE controller deinitialized");
+    wifi_prov_mgr_deinit();
+    ESP_LOGI(TAG, ">>> provisioning_task: wifi_prov_mgr_deinit() returned");
 
+    // 等待 QR task 完全结束
+    while (s_qr_queue != NULL) {
+      vTaskDelay(pdMS_TO_TICKS(20));
+    }
+
+    gs_nav_pop();
+
+    ESP_LOGI(TAG, "Provisioning cleanup complete");
   } else {
-    ESP_LOGI(TAG, "Already provisioned, starting Wi-Fi STA");
+
+    ESP_LOGI(TAG, "Already provisioned, starting WiFi STA");
+
     wifi_prov_mgr_deinit();
 
     ESP_ERROR_CHECK(esp_event_handler_register(WIFI_EVENT, ESP_EVENT_ANY_ID,
                                                &event_handler, NULL));
 
     wifi_init_sta();
-    xEventGroupWaitBits(wifi_event_group, WIFI_CONNECTED_EVENT, true, true,
+
+    xEventGroupWaitBits(wifi_event_group, WIFI_CONNECTED_EVENT, pdFALSE, pdTRUE,
                         portMAX_DELAY);
   }
+
   ESP_LOGI(TAG, "Provisioning task completed");
 
-  // 任务结束，自行删除
+  xEventGroupSetBits(wifi_event_group, PROV_FINISH_BIT);
+
   vTaskDelete(NULL);
 }
 
@@ -387,18 +392,13 @@ esp_err_t wifi_prov_init(void) {
   static bool initialized = false;
 
   if (!initialized) {
-    // NVS 和网络接口初始化
     wifi_prov_nvs_init();
-    /* QR 队列必须在使用前初始化（配网过程中 WiFi 框架回调会发送 QR 数据） */
     prov_qr_init();
 
-    // 事件循环
     ESP_ERROR_CHECK(esp_event_loop_create_default());
 
-    // 创建事件组（必须在任何使用它的 task 之前）
     wifi_event_group = xEventGroupCreate();
 
-    // 注册事件处理器
     ESP_ERROR_CHECK(esp_event_handler_register(
         WIFI_PROV_EVENT, ESP_EVENT_ANY_ID, &event_handler, NULL));
     ESP_ERROR_CHECK(esp_event_handler_register(
@@ -409,14 +409,11 @@ esp_err_t wifi_prov_init(void) {
     ESP_ERROR_CHECK(esp_event_handler_register(IP_EVENT, IP_EVENT_STA_GOT_IP,
                                                &event_handler, NULL));
 
-    // 创建 WiFi station 网络接口
     esp_netif_create_default_wifi_sta();
 
-    // 初始化 WiFi 驱动
     wifi_init_config_t cfg = WIFI_INIT_CONFIG_DEFAULT();
     ESP_ERROR_CHECK(esp_wifi_init(&cfg));
 
-    // 初始化 provisioning manager
     wifi_prov_mgr_config_t config = {
         .wifi_prov_conn_cfg =
             {
@@ -430,7 +427,6 @@ esp_err_t wifi_prov_init(void) {
     initialized = true;
   }
 
-  // 启动 provisioning 任务（如果已配网，该任务会直接连接 WiFi）
   xTaskCreate(provisioning_task, "wifi_prov", 8192, NULL, 5, NULL);
 
   return ESP_OK;

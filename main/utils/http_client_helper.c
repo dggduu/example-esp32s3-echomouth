@@ -6,8 +6,14 @@
 #include "esp_log.h"
 #include "freertos/FreeRTOS.h"
 #include "freertos/semphr.h"
-#include "mdns.h"
 #include "sdkconfig.h"
+
+// 引入 UI 弹窗与 mDNS 模块
+#include "gs_portal.h"
+
+#ifdef CONFIG_HTTP_MODE_MDNS
+#include "mdns_helper.h"
+#endif
 
 #ifdef CONFIG_HTTP_MODE_HTTPS
 #include "esp_crt_bundle.h"
@@ -17,7 +23,6 @@
 
 #define URL_MAX_LEN 256
 #define HTTP_REV_BUF_SIZE 1024
-#define MDNS_RESOLVE_TIMEOUT_MS 2000
 
 #ifdef CONFIG_HTTP_MODE_MDNS
 #define SERVER_HOSTNAME CONFIG_SERVER_HOSTNAME
@@ -36,42 +41,36 @@ static SemaphoreHandle_t s_mutex = NULL;
 #endif
 
 /*---------------------------------------------------------------
- * mDNS 模块优化
+ * mDNS IP 缓存与解析逻辑 (强化互斥锁与初始化判定)
  *--------------------------------------------------------------*/
 #ifdef CONFIG_HTTP_MODE_MDNS
 
 static bool resolve_server_ip(char *ip, size_t len) {
-  esp_ip4_addr_t addr;
-  char hostname[64];
-
-  // 确保主机名格式正确
-  snprintf(hostname, sizeof(hostname), "%.63s", SERVER_HOSTNAME);
-
-  for (int i = 0; i < 3; i++) {
-    if (mdns_query_a(hostname, MDNS_RESOLVE_TIMEOUT_MS, &addr) == ESP_OK) {
-      snprintf(ip, len, IPSTR, IP2STR(&addr));
-      ESP_LOGI(TAG, "mDNS Resolved %s -> %s", hostname, ip);
-      return true;
-    }
-    vTaskDelay(pdMS_TO_TICKS(300));
-  }
-
-  ESP_LOGE(TAG, "Failed to resolve mDNS hostname: %s", hostname);
-  return false;
+  // 调用 mdns_helper 模块解析目标服务器 IP
+  return mdns_helper_resolve_ip(SERVER_HOSTNAME, ip, len);
 }
 
 static bool get_server_ip(char *ip, size_t len) {
+  // 1. 互斥锁二次安全防御：若未初始化则尝试兜底创建
   if (!s_mutex) {
-    ESP_LOGE(TAG, "mDNS mutex not initialized. Call http_helper_init() first.");
-    return false;
+    ESP_LOGW(TAG, "mDNS mutex was NULL, lazy initializing...");
+    s_mutex = xSemaphoreCreateMutex();
+    if (!s_mutex) {
+      ESP_LOGE(TAG, "Create mDNS mutex failed!");
+      gs_toast_show("系统锁创建失败", GS_TOAST_FAILED);
+      return false;
+    }
   }
 
-  if (xSemaphoreTake(s_mutex, pdMS_TO_TICKS(5000)) != pdTRUE) {
+  // 2. 获取互斥锁，等待超时时间设定为 10 秒（匹配 mDNS 多轮重试）
+  if (xSemaphoreTake(s_mutex, pdMS_TO_TICKS(10000)) != pdTRUE) {
     ESP_LOGE(TAG, "Get mDNS mutex timeout");
+    gs_toast_show("网络互斥锁超时", GS_TOAST_FAILED);
     return false;
   }
 
   bool ret = true;
+  // 3. 检查缓存；无缓存时发起查询
   if (s_cached_ip[0] == '\0') {
     if (!resolve_server_ip(s_cached_ip, sizeof(s_cached_ip))) {
       ret = false;
@@ -86,9 +85,9 @@ static bool get_server_ip(char *ip, size_t len) {
   return ret;
 }
 
-// 提供主动清除 IP 缓存接口（网络异常时调用）
+// 主动清除 IP 缓存接口（网络请求失败时自动调用）
 static void invalidate_server_ip_cache(void) {
-  if (s_mutex && xSemaphoreTake(s_mutex, pdMS_TO_TICKS(1000)) == pdTRUE) {
+  if (s_mutex && xSemaphoreTake(s_mutex, pdMS_TO_TICKS(2000)) == pdTRUE) {
     s_cached_ip[0] = '\0';
     xSemaphoreGive(s_mutex);
     ESP_LOGW(TAG, "mDNS IP cache invalidated.");
@@ -98,7 +97,7 @@ static void invalidate_server_ip_cache(void) {
 #endif
 
 /*---------------------------------------------------------------
- * HTTPS 配置优化
+ * HTTPS 配置
  *--------------------------------------------------------------*/
 static void config_https(esp_http_client_config_t *config) {
 #ifdef CONFIG_HTTP_MODE_HTTPS
@@ -128,8 +127,9 @@ static void config_https(esp_http_client_config_t *config) {
  * URL 构建
  *--------------------------------------------------------------*/
 static bool build_url(char *url, size_t len, const char *path) {
-  if (!path)
+  if (!path) {
     path = "/";
+  }
 
 #ifdef CONFIG_HTTP_MODE_MDNS
   char ip[32];
@@ -155,7 +155,6 @@ static esp_err_t http_event_handler(esp_http_client_event_t *evt) {
       return ESP_OK;
     }
 
-    // 防缓冲区溢出，保留 1 字节给 '\0'
     int remain = ctx->max_len - 1 - ctx->total_len;
     if (remain <= 0) {
       ESP_LOGW(TAG, "Response buffer full, truncation occurred.");
@@ -165,7 +164,7 @@ static esp_err_t http_event_handler(esp_http_client_event_t *evt) {
     int copy_len = (evt->data_len > remain) ? remain : evt->data_len;
     memcpy(ctx->buffer + ctx->total_len, evt->data, copy_len);
     ctx->total_len += copy_len;
-    ctx->buffer[ctx->total_len] = '\0'; // 动态补充 null 终止符
+    ctx->buffer[ctx->total_len] = '\0';
   }
 
   return ESP_OK;
@@ -208,6 +207,7 @@ static bool perform_request(esp_http_client_method_t method, const char *path,
   esp_http_client_handle_t client = esp_http_client_init(&config);
   if (!client) {
     ESP_LOGE(TAG, "Create client failed");
+    gs_toast_show("创建HTTP客户端失败", GS_TOAST_FAILED);
     return false;
   }
 
@@ -225,22 +225,27 @@ static bool perform_request(esp_http_client_method_t method, const char *path,
     ESP_LOGE(TAG, "HTTP request failed: %s | URL: %s", esp_err_to_name(err),
              url);
 #ifdef CONFIG_HTTP_MODE_MDNS
-    // 网络请求失败时清空 mDNS IP 缓存，防服务器换 IP 后无法恢复
+    // 请求失败时清空 IP 缓存，防止 IP 变更导致后续请求一直报错
     invalidate_server_ip_cache();
 #endif
     esp_http_client_cleanup(client);
+    gs_toast_show("网络请求失败", GS_TOAST_FAILED);
     return false;
   }
 
   int status = esp_http_client_get_status_code(client);
   esp_http_client_cleanup(client);
 
-  // 放宽状态码判定至标准的 2xx 成功范围
   if (status >= 200 && status < 300) {
     return true;
   }
 
   ESP_LOGE(TAG, "HTTP status code error: %d | URL: %s", status, url);
+
+  char err_toast[32];
+  snprintf(err_toast, sizeof(err_toast), "服务器响应错误: %d", status);
+  gs_toast_show(err_toast, GS_TOAST_FAILED);
+
   return false;
 }
 
@@ -250,11 +255,24 @@ static bool perform_request(esp_http_client_method_t method, const char *path,
 
 bool http_helper_init(void) {
 #ifdef CONFIG_HTTP_MODE_MDNS
+  // 1. 保证互斥锁优先且安全创建
   if (s_mutex == NULL) {
     s_mutex = xSemaphoreCreateMutex();
+    if (s_mutex == NULL) {
+      ESP_LOGE(TAG, "Failed to create s_mutex");
+      return false;
+    }
   }
-  return (s_mutex != NULL);
+
+  // 2. 同步初始化 mDNS 模块，确保连接前协议栈已就绪
+  if (!mdns_helper_init("esp32-s3")) {
+    ESP_LOGE(TAG, "Failed to initialize mDNS synchronously");
+    return false;
+  }
+
+  return true;
 #else
+  ESP_LOGI(TAG, "HTTP Helper initialized in direct/HTTPS mode.");
   return true;
 #endif
 }
@@ -302,12 +320,12 @@ bool http_put_binary_with_host(const char *url, uint8_t *data, int len,
   esp_http_client_handle_t client = esp_http_client_init(&config);
   if (!client) {
     ESP_LOGE(TAG, "Create client failed");
+    gs_toast_show("创建HTTP客户端失败", GS_TOAST_FAILED);
     return false;
   }
 
   esp_http_client_set_header(client, "Content-Type", "image/jpeg");
 
-  // 覆写 Host 头以匹配 S3 预签名 URL 的原始主机名
   if (host_hdr && host_hdr[0] != '\0') {
     esp_http_client_set_header(client, "Host", host_hdr);
     ESP_LOGI(TAG, "PUT Host override: %s", host_hdr);
@@ -324,9 +342,11 @@ bool http_put_binary_with_host(const char *url, uint8_t *data, int len,
       success = true;
     } else {
       ESP_LOGE(TAG, "PUT status failed: %d, URL: %s", status, url);
+      gs_toast_show("文件上传失败", GS_TOAST_FAILED);
     }
   } else {
     ESP_LOGE(TAG, "PUT request failed: %s", esp_err_to_name(err));
+    gs_toast_show("网络传输中断", GS_TOAST_FAILED);
   }
 
   esp_http_client_cleanup(client);
@@ -381,6 +401,7 @@ bool http_ping_server(void) {
     invalidate_server_ip_cache();
 #endif
     esp_http_client_cleanup(client);
+    gs_toast_show("无法连接到服务器", GS_TOAST_FAILED);
     return false;
   }
 
@@ -389,9 +410,11 @@ bool http_ping_server(void) {
 
   if (status >= 200 && status < 500) {
     ESP_LOGI(TAG, "Server reachable, status=%d", status);
+    gs_toast_show("服务器连接正常", GS_TOAST_SUCCESS);
     return true;
   }
 
   ESP_LOGE(TAG, "Server unreachable, status=%d", status);
+  gs_toast_show("服务器响应异常", GS_TOAST_FAILED);
   return false;
 }

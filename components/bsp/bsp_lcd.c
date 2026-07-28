@@ -217,30 +217,22 @@ static const st77916_lcd_init_cmd_t vendor_specific_init_yysj[] = {
     {0x00, (uint8_t[]){}, 0, 120},
 };
 
-// ===== 电源控制 =====
-
 esp_err_t bsp_lcd_power_up(void) {
   ESP_LOGI(TAG, "LCD Power Up");
 
-  /* CS 拉高 (未选中) */
   bsp_lcd_cs_high();
 
-  /* 上电 */
   bsp_lcd_power_low();
   vTaskDelay(pdMS_TO_TICKS(10));
 
-  /* 释放复位 */
   bsp_lcd_reset_high();
   vTaskDelay(pdMS_TO_TICKS(120));
 
-  /* 触摸复位 */
-  bsp_pca9539_set_pin_level(BSP_PCA9539_PIN(1, 1), 1); // TP_RST HIGH
+  bsp_pca9539_set_pin_level(BSP_PCA9539_PIN(1, 1), 1);
   vTaskDelay(pdMS_TO_TICKS(10));
 
-  /* 背光 */
   bsp_lcd_backlight_low();
 
-  // bsp_i2c_scan(bsp_i2c_get_main_handle());
   ESP_LOGI(TAG, "LCD Power Up Done");
   return ESP_OK;
 }
@@ -248,7 +240,6 @@ esp_err_t bsp_lcd_power_up(void) {
 esp_err_t bsp_lcd_power_down(void) {
   ESP_LOGI(TAG, "LCD Power Down");
 
-  // PMOS控制
   bsp_lcd_backlight_high();
   bsp_lcd_power_high();
 
@@ -264,16 +255,11 @@ void bsp_lcd_backlight_set(bool on) {
   }
 }
 
-// ===== LCD 初始化 (SPI + Panel + Touch) =====
-
 esp_err_t bsp_lcd_init(esp_lcd_panel_handle_t *panel,
                        esp_lcd_touch_handle_t *touch) {
   ESP_LOGI(TAG, "LCD Init");
 
-  /*---------------- CS 拉低 (选中) ----------------*/
   bsp_lcd_cs_low();
-
-  /*---------------- SPI ----------------*/
 
   spi_bus_config_t buscfg = {
       .sclk_io_num = BSP_LCD_SCLK,
@@ -308,8 +294,6 @@ esp_err_t bsp_lcd_init(esp_lcd_panel_handle_t *panel,
 
   ESP_ERROR_CHECK(esp_lcd_new_panel_io_spi(
       (esp_lcd_spi_bus_handle_t)BSP_LCD_HOST, &io_cfg, &s_io_handle));
-
-  /*---------------- Panel ----------------*/
 
   st77916_vendor_config_t vendor = {
 
@@ -349,7 +333,6 @@ esp_err_t bsp_lcd_init(esp_lcd_panel_handle_t *panel,
 
   vTaskDelay(pdMS_TO_TICKS(20));
 
-  /*---------------- Touch ----------------*/
   s_touch = NULL;
   s_tp_io = NULL;
 
@@ -365,10 +348,8 @@ esp_err_t bsp_lcd_init(esp_lcd_panel_handle_t *panel,
           .x_max = BSP_LCD_H_RES,
           .y_max = BSP_LCD_V_RES,
 
-          // 注意：复位已在 bsp_lcd_power_up 中通过 PCA9539 完成，此处填
-          // GPIO_NUM_NC
           .rst_gpio_num = GPIO_NUM_NC,
-          .int_gpio_num = BSP_TOUCH_INT, // 中断依旧使用 Native GPIO
+          .int_gpio_num = BSP_TOUCH_INT,
 
           .flags =
               {
@@ -393,8 +374,6 @@ esp_err_t bsp_lcd_init(esp_lcd_panel_handle_t *panel,
   return ESP_OK;
 }
 
-// ===== 触摸 =====
-
 esp_err_t bsp_lcd_touch_get_point(esp_lcd_touch_handle_t touch, uint16_t *x,
                                   uint16_t *y) {
   if (!touch || !x || !y)
@@ -409,8 +388,6 @@ esp_err_t bsp_lcd_touch_get_point(esp_lcd_touch_handle_t touch, uint16_t *x,
   }
   return ESP_ERR_NOT_FOUND;
 }
-
-// ===== RGB 测试 =====
 
 esp_err_t bsp_lcd_rgb_test(esp_lcd_panel_handle_t panel) {
   if (panel == NULL) {
@@ -429,14 +406,7 @@ esp_err_t bsp_lcd_rgb_test(esp_lcd_panel_handle_t panel) {
   }
 
   const uint16_t colors[] = {
-      0xF800, // Red
-      0x07E0, // Green
-      0x001F, // Blue
-      0xFFE0, // Yellow
-      0xF81F, // Magenta
-      0x07FF, // Cyan
-      0xFFFF, // White
-      0x0000, // Black
+      0xF800, 0x07E0, 0x001F, 0xFFE0, 0xF81F, 0x07FF, 0xFFFF, 0x0000,
   };
 
   const int color_num = sizeof(colors) / sizeof(colors[0]);
@@ -463,22 +433,17 @@ esp_err_t bsp_lcd_rgb_test(esp_lcd_panel_handle_t panel) {
   return ESP_OK;
 }
 
-// ===== LVGL 初始化 =====
-
 esp_err_t bsp_lvgl_init(esp_lcd_panel_handle_t panel,
                         esp_lcd_touch_handle_t touch) {
   lvgl_port_cfg_t lvgl_cfg = ESP_LVGL_PORT_INIT_CONFIG();
-  lvgl_cfg.task_stack =
-      16384; // Increase from default 7168 — needed for scaled image rendering
+  lvgl_cfg.task_stack = 16384;
   ESP_ERROR_CHECK(lvgl_port_init(&lvgl_cfg));
 
-  /* -------- Display -------- */
   const lvgl_port_display_cfg_t disp_cfg = {
       .io_handle = s_io_handle,
       .panel_handle = panel,
       .control_handle = NULL,
-      .buffer_size = BSP_LCD_H_RES *
-                     20, // 7200px (~14.4KB) — larger tiles = fewer DMA txns
+      .buffer_size = BSP_LCD_H_RES * 10,
       .double_buffer = false,
       .hres = BSP_LCD_H_RES,
       .vres = BSP_LCD_V_RES,
@@ -493,8 +458,8 @@ esp_err_t bsp_lvgl_init(esp_lcd_panel_handle_t panel,
       .flags =
           {
               .buff_dma = true,
-              .buff_spiram = false, // Internal DRAM avoids PSRAM DMA cache
-                                    // coherency issues
+              .buff_spiram = false,
+
           },
   };
 
@@ -505,7 +470,6 @@ esp_err_t bsp_lvgl_init(esp_lcd_panel_handle_t panel,
     return ESP_FAIL;
   }
 
-  /* -------- Touch -------- */
   if (touch) {
     lvgl_port_touch_cfg_t touch_cfg = {
         .disp = disp_handle,
@@ -531,8 +495,7 @@ esp_err_t bsp_lvgl_init(esp_lcd_panel_handle_t panel,
 }
 esp_err_t bsp_lcd_touch_deinit(void) {
   if (touch_indev) {
-    // 如果 LVGL 绑定了，建议由 LVGL 的 deinit 或者移除 Indev
-    // 逻辑清理，或者直接置空
+
     touch_indev = NULL;
   }
 
@@ -541,7 +504,6 @@ esp_err_t bsp_lcd_touch_deinit(void) {
     s_touch = NULL;
   }
 
-  // 关键：必须显式销毁 Panel IO，释放 I2C 总线节点！
   if (s_tp_io) {
     esp_lcd_panel_io_del(s_tp_io);
     s_tp_io = NULL;
@@ -554,17 +516,16 @@ esp_err_t bsp_lcd_touch_deinit(void) {
 esp_err_t bsp_lcd_tp_power_cycle(void) {
   ESP_LOGI(TAG, "Performing Full Hardware Power Cycle for LCD & Touch...");
 
-  // 1. 关闭背光
-  bsp_lcd_power_low(); // 开启电源
+  bsp_lcd_power_low();
   bsp_lcd_backlight_set(false);
-  // 5. 拉一次 TP_RST (硬件复位脉冲)
+
   bsp_lcd_touch_reset_low();
   vTaskDelay(pdMS_TO_TICKS(10));
   bsp_lcd_touch_reset_high();
-  vTaskDelay(pdMS_TO_TICKS(50)); // 等待 Touch IC 内部 Boot 完成
+  vTaskDelay(pdMS_TO_TICKS(50));
 
   bsp_lcd_touch_deinit();
-  // 2. 禁能所有数据/控制 GPIO，防止倒灌电
+
   const gpio_num_t pins_to_disable[] = {BSP_LCD_SCLK,  BSP_LCD_DATA0,
                                         BSP_LCD_DATA1, BSP_LCD_DATA2,
                                         BSP_LCD_DATA3, BSP_TOUCH_INT};
@@ -575,7 +536,7 @@ esp_err_t bsp_lcd_tp_power_cycle(void) {
       gpio_set_direction(pins_to_disable[i], GPIO_MODE_DISABLE);
     }
   }
-  // LCD 真正硬件复位
+
   bsp_pca9539_set_pin_level(BSP_IOEXP_LCD_RST, 0);
   vTaskDelay(pdMS_TO_TICKS(20));
 
@@ -586,3 +547,30 @@ esp_err_t bsp_lcd_tp_power_cycle(void) {
   return ESP_OK;
 }
 lv_indev_t *bsp_lcd_get_touch_indev(void) { return touch_indev; }
+
+esp_err_t bsp_lcd_sleep(bool sleep) {
+  if (!s_panel) return ESP_FAIL;
+  return esp_lcd_panel_disp_sleep(s_panel, sleep);
+}
+
+esp_err_t bsp_lcd_deep_sleep_enter(void) {
+  if (!s_io_handle) return ESP_FAIL;
+  ESP_LOGI(TAG, "Entering LCD Deep Sleep (SLPIN → DSTBDSLP)...");
+  // Step 1: SLPIN (0x10), wait 5ms
+  if (s_panel) {
+    esp_lcd_panel_disp_sleep(s_panel, true);
+  }
+  // Step 2: DSTBDSLP (0xCF) with param 0x01 (DSLP_EN=1, DSTB_EN=0)
+  // Must send via raw IO since this is ST77916-specific
+  bsp_pca9539_set_pin_level(BSP_IOEXP_LCD_CS, 0);
+  int lcd_cmd = 0xCF;
+  lcd_cmd &= 0xff;
+  lcd_cmd <<= 8;
+  lcd_cmd |= 0x02ULL << 24;  // LCD_OPCODE_WRITE_CMD for QSPI
+  uint8_t param = 0x01;
+  esp_lcd_panel_io_tx_param(s_io_handle, lcd_cmd, &param, 1);
+  bsp_pca9539_set_pin_level(BSP_IOEXP_LCD_CS, 1);
+  vTaskDelay(pdMS_TO_TICKS(5));
+  ESP_LOGI(TAG, "LCD Deep Sleep entered");
+  return ESP_OK;
+}

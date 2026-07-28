@@ -97,7 +97,8 @@ static void enter_dimming(void) {
   if (s_state == PWR_STATE_DIMMING)
     return;
 
-  ESP_LOGI(TAG, "State -> DIMMING (Backlight OFF, CPU Low Freq)");
+  ESP_LOGI(TAG, "State -> DIMMING (SLPIN + Backlight OFF, CPU Low Freq)");
+  bsp_lcd_sleep(true);
   bsp_lcd_backlight_set(false);
   cpu_freq_low();
   if (!audio_helper_is_running()) {
@@ -110,7 +111,8 @@ static void back_to_normal(void) {
   if (s_state == PWR_STATE_NORMAL)
     return;
 
-  ESP_LOGI(TAG, "State -> NORMAL (Backlight ON, CPU High Freq)");
+  ESP_LOGI(TAG, "State -> NORMAL (SLPOUT + Backlight ON, CPU High Freq)");
+  bsp_lcd_sleep(false);
   bsp_lcd_backlight_set(true);
   cpu_freq_high();
   s_state = PWR_STATE_NORMAL;
@@ -185,6 +187,7 @@ void power_manager_enter_deep_sleep(void) {
   bsp_camera_power_down();
   bsp_audio_power_off();
 
+  bsp_lcd_deep_sleep_enter();
   bsp_lcd_tp_power_cycle();
   ESP_LOGI(TAG, "De-initializing hardware I2C bus...");
   bsp_i2c_deinit_main();

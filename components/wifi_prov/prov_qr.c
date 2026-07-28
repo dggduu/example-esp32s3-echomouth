@@ -141,23 +141,6 @@ void wifi_prov_print_qr(const char *name, const char *username, const char *pop,
     return;
   }
 
-  // char payload[150] = {0};
-  // if (pop) {
-  //   snprintf(payload, sizeof(payload),
-  //            "{\"ver\":\"%s\",\"name\":\"%s\""
-  //            ",\"username\":\"%s\",\"pop\":\"%s\",\"transport\":\"%s\"}",
-  //            PROV_QR_VERSION, name, username, pop, transport);
-  // } else {
-  //   snprintf(payload, sizeof(payload),
-  //            "{\"ver\":\"%s\",\"name\":\"%s\""
-  //            ",\"transport\":\"%s\"}",
-  //            PROV_QR_VERSION, name, transport);
-  // }
-  // ESP_LOGI(TAG, "send QR:%s", payload);
-  // qr_display_req_t req = {
-  //     .qr_data = strdup(payload),
-  //     .hint_text = strdup("扫描二维码进行配网")};
-
   // 读取设备派生密钥
   char dev_key_b64[25] = {0};
   uint8_t device_key[16];

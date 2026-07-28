@@ -12,6 +12,6 @@ typedef enum {
   OTA_STATE_FAILED
 } ota_state_t;
 
-bool ota_backend_init(void);
+bool ota_backend_init(const char *device_name);
 void ota_backend_deinit(void);
 #endif

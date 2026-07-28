@@ -1,29 +1,4 @@
 dependencies:
-  espressif/ble_ota:
-    component_hash: 1415ffdf0ff3169d52b668f5da8c3dd60932938f07a28c54ffbc0e8901dbf7ba
-    dependencies:
-    - name: espressif/cmake_utilities
-      registry_url: https://components.espressif.com
-      require: private
-      version: 0.*
-    - name: espressif/esp_encrypted_img
-      registry_url: https://components.espressif.com
-      require: private
-      version: ^2.0.1
-    - name: idf
-      require: private
-      version: '>=4.4'
-    source:
-      registry_url: https://components.espressif.com/
-      type: service
-    targets:
-    - esp32
-    - esp32c3
-    - esp32h2
-    - esp32s3
-    - esp32c2
-    - esp32c6
-    version: 0.1.16
   espressif/button:
     component_hash: ad64de1d1b8aa139564810a8519b2f1ac275a560a512479ee94c1b6983469d4b
     dependencies:
@@ -367,7 +342,6 @@ dependencies:
       type: service
     version: 9.5.0
 direct_dependencies:
-- espressif/ble_ota
 - espressif/button
 - espressif/cmake_utilities
 - espressif/esp-dsp
@@ -383,6 +357,6 @@ direct_dependencies:
 - idf
 - joltwallet/littlefs
 - lvgl/lvgl
-manifest_hash: d265613bf4eb0848df27283d8a21399aeb00437651f21b3662f2be77be1d063a
+manifest_hash: c428e9ea6961ecee4f1ff966648784a557b2a71450dc7c47ac39e7bf55a06309
 target: esp32s3
 version: 2.0.0

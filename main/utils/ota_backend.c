@@ -9,11 +9,13 @@
 #include "freertos/ringbuf.h"
 #include "freertos/semphr.h"
 #include "freertos/task.h"
+#include "host/ble_gap.h"
 #include "nimble/nimble_port.h"
 #include "nvs_flash.h"
 #include "page_ota.h"
+#include "services/gap/ble_svc_gap.h"
+#include <stdint.h>
 #include <string.h>
-
 #define OTA_RINGBUF_SIZE 8192
 #define OTA_TASK_STACK_SIZE 4096
 
@@ -122,7 +124,7 @@ OTA_ERROR:
   vTaskDelete(NULL);
 }
 
-bool ota_backend_init(void) {
+bool ota_backend_init(const char *device_name) {
   if (s_started)
     return true;
 
@@ -149,6 +151,12 @@ bool ota_backend_init(void) {
     ESP_LOGE(TAG, "BLE Host init failed");
     return false;
   }
+
+  // int rc = ble_svc_gap_device_name_set(device_name);
+  // if (rc != 0) {
+  //   ESP_LOGE(TAG, "Failed to set device name, error %d", rc);
+  // }
+
   esp_ble_ota_recv_fw_data_callback(ota_recv_fw_cb);
 
   if (s_ota_task == NULL) {

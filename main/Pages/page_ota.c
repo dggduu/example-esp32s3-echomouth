@@ -54,7 +54,7 @@ static void *page_ota_init(void *args) {
     return NULL;
   }
 
-  if (!ota_backend_init()) {
+  if (!ota_backend_init("Project_Swan")) {
     ESP_LOGE(TAG, "Failed to init OTA backend");
     free(ctx);
     return NULL;
