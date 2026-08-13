@@ -415,6 +415,6 @@ bool http_ping_server(void) {
   }
 
   ESP_LOGE(TAG, "Server unreachable, status=%d", status);
-  gs_toast_show("服务器响应异常", GS_TOAST_FAILED);
+        gs_toast_show("服务器响应异常", GS_TOAST_FAILED);
   return false;
 }

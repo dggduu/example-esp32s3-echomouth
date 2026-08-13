@@ -61,6 +61,9 @@ static TaskHandle_t s_monitor_task_handle = NULL;
 static TaskHandle_t s_vlm_poll_task_handle = NULL;
 static StaticTask_t s_vlm_task_tcb;
 static StackType_t *s_vlm_task_stack = NULL;
+/* monitor 任务栈（PSRAM 静态分配，见 monitor_task_start） */
+static StaticTask_t s_monitor_task_tcb;
+static StackType_t *s_monitor_task_stack = NULL;
 
 static SemaphoreHandle_t s_upload_done_sem = NULL;
 static SemaphoreHandle_t s_monitor_mutex = NULL;
@@ -80,6 +83,10 @@ static int64_t s_face_wait_start_us = 0;
 static volatile bool s_is_paused = false;
 /* 调试页暂停期间触发强制拍照：临时解除暂停执行一轮，完成后自动恢复暂停 */
 static volatile bool s_pause_after_capture = false;
+/* 强制拍照请求挂起标记：monitor 可能正阻塞在上传回调等待里，
+ * 仅改 s_state 会被旧循环吞掉（等待结束后无条件进 SLEEP），
+ * 需要此标记让等待循环提前退出并在本轮后立即执行 */
+static volatile bool s_force_capture_pending = false;
 
 /* 服务端返回的动态检测间隔（秒），由 vlm_poll 任务写入、monitor 任务消费。
  * -1 表示暂无待应用的值；到达后 monitor 在 SLEEP 阶段应用并重置唤醒计时，
@@ -484,6 +491,10 @@ static void monitor_task_func(void *arg) {
       int64_t face_wait_sec =
           (esp_timer_get_time() - s_face_wait_start_us) / 1000000LL;
 
+      /* 本轮抓拍已开始执行：消费挂起的强制请求标记，避免本轮上传等待
+       * 结束后又被同一标记触发一次重复抓拍 */
+      s_force_capture_pending = false;
+
       bool ok = capture_and_enqueue();
       if (!ok) {
         ESP_LOGE(TAG, "Capture failed");
@@ -498,14 +509,37 @@ static void monitor_task_func(void *arg) {
 
       xSemaphoreTake(s_upload_done_sem, 0);
 
-      if (xSemaphoreTake(s_upload_done_sem,
-                         pdMS_TO_TICKS(UPLOAD_CALLBACK_TIMEOUT_MS)) == pdTRUE) {
+      /* 上传回调等待改为 1s 分片轮询：期间到达的强制拍照请求可随时打断。
+       * 原一次性阻塞 30s 时，force_capture 只能改状态变量，任务卡在旧
+       * 循环里，等待结束后仍无条件进 SLEEP，强制请求被静默丢弃。 */
+      bool upload_done = false;
+      for (int waited_ms = 0; waited_ms < UPLOAD_CALLBACK_TIMEOUT_MS;
+           waited_ms += 1000) {
+        if (s_force_capture_pending)
+          break;
+        if (xSemaphoreTake(s_upload_done_sem, pdMS_TO_TICKS(1000)) == pdTRUE) {
+          upload_done = true;
+          break;
+        }
+      }
+
+      if (upload_done) {
         s_current_interval_sec = adjust_interval_by_face_wait(face_wait_sec);
+      } else if (s_force_capture_pending) {
+        ESP_LOGI(TAG, "Upload wait aborted by forced capture");
       } else {
         ESP_LOGW(TAG, "Upload timeout");
         s_current_interval_sec += INTERVAL_STEP_SEC;
         if (s_current_interval_sec > INTERVAL_MAX_SEC)
           s_current_interval_sec = INTERVAL_MAX_SEC;
+      }
+
+      /* 等待期间有强制拍照请求 → 不进入 SLEEP，立即执行下一轮抓拍 */
+      if (s_force_capture_pending) {
+        s_force_capture_pending = false;
+        s_state = MONITOR_STATE_CAPTURING;
+        ESP_LOGI(TAG, "Pending forced capture executed immediately");
+        break;
       }
 
       s_next_wake_time_us =
@@ -532,6 +566,10 @@ void monitor_task_force_capture(bool skip_face) {
   }
 
   xSemaphoreTake(s_monitor_mutex, portMAX_DELAY);
+
+  /* 挂起标记：若任务正阻塞在上传回调等待里，标记能让等待分片轮询
+   * 提前退出，并在本轮结束后立即执行强制抓拍（否则请求被旧循环吞掉） */
+  s_force_capture_pending = true;
 
   monitor_state_t prev_state = s_state;
   int64_t prev_wake = s_next_wake_time_us;
@@ -589,8 +627,21 @@ void monitor_task_start(void) {
   }
 
   if (!s_monitor_task_handle) {
-    xTaskCreatePinnedToCore(monitor_task_func, "monitor", MONITOR_STACK_SIZE,
-                            NULL, 3, &s_monitor_task_handle, 1);
+    /* 任务栈从 PSRAM 分配（与 vlm_poll/uploader 一致）：
+     * 启动后内部 RAM 仅剩约 10KB，xTaskCreatePinnedToCore 的 8KB 内部栈
+     * 分配经常失败且返回值被忽略 → 任务静默不存在（状态机完全不运行，
+     * 表现为调试页强制拍照无任何反应）。 */
+    size_t stack_words = MONITOR_STACK_SIZE / sizeof(StackType_t);
+    s_monitor_task_stack = (StackType_t *)heap_caps_malloc(
+        MONITOR_STACK_SIZE, MALLOC_CAP_SPIRAM | MALLOC_CAP_8BIT);
+    if (s_monitor_task_stack) {
+      s_monitor_task_handle = xTaskCreateStaticPinnedToCore(
+          monitor_task_func, "monitor", stack_words, NULL, 3,
+          s_monitor_task_stack, &s_monitor_task_tcb, 1);
+    }
+    if (!s_monitor_task_handle) {
+      ESP_LOGE(TAG, "Failed to allocate/create monitor task");
+    }
   }
 
   TEST_MEM_INFO(TAG);
