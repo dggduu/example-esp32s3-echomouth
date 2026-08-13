@@ -21,34 +21,19 @@ static const char *TAG = "S3_helper";
 #define MAX_RETRY_LIMIT 10
 #define RETRY_BACKOFF_MS 5000
 #define RETRY_BACKOFF_LONG_MS 30000
-#define UPLOADER_STACK_SIZE 6144
+/* esp_http_client_perform + URL 拼接局部变量占用较大，且任务栈位于 PSRAM，
+ * 溢出会直接踩坏相邻堆块（曾触发 uploader 栈 canary + 堆 free-list 损坏）；
+ * 预留充足余量 */
+#define UPLOADER_STACK_SIZE 20480
+/* 预分配的上传缓冲：任务启动时一次性从 PSRAM 分配并全程复用，
+ * 避免每次任务 malloc/free 大块内存造成的堆碎片化 */
+#define UPLOAD_BUF_SIZE (256 * 1024)
 
 static TaskHandle_t s_uploader_task_handle = NULL;
 static StaticTask_t s_uploader_task_tcb;
 static StackType_t *s_uploader_task_stack = NULL;
-
-/**
- * @brief 提取 URL 中的 host[:port]，用于 S3 签名 Host 覆写
- * 例: "http://aobara-pc.local:9000/bucket/key" → "aobara-pc.local:9000"
- */
-static bool extract_host_from_url(const char *url, char *host_out,
-                                  size_t host_len) {
-  if (!url || !host_out || host_len == 0)
-    return false;
-  const char *start = strstr(url, "://");
-  if (!start)
-    return false;
-  start += 3;
-  const char *end = strchr(start, '/');
-  if (!end)
-    return false;
-  size_t len = end - start;
-  if (len >= host_len)
-    len = host_len - 1;
-  memcpy(host_out, start, len);
-  host_out[len] = '\0';
-  return true;
-}
+static uint8_t *s_upload_buf = NULL;
+static uint32_t s_upload_buf_size = 0;
 
 static void uploader_task(void *arg) {
   while (1) {
@@ -67,7 +52,8 @@ static void uploader_task(void *arg) {
 
     if (job.retry_count >= MAX_RETRY_LIMIT) {
       // 达到最大重试次数 → 保留文件，等待网络恢复后重新开始计数
-      ESP_LOGW(TAG, "Job %s reached max retries (%d). Holding for network recovery.",
+      ESP_LOGW(TAG,
+               "Job %s reached max retries (%d). Holding for network recovery.",
                job.path, MAX_RETRY_LIMIT);
       vTaskDelay(pdMS_TO_TICKS(15000)); // 等待 15 秒，期望网络恢复
       job.retry_count = 0;              // 重置计数器
@@ -107,39 +93,13 @@ static void uploader_task(void *arg) {
     cJSON_Delete(root); // 及时释放 HTTP 响应的 JSON 解析树
     root = NULL;
 
-    // 提取原始 Host（用于 S3 签名匹配）
-    char original_host[64] = {0};
-    extract_host_from_url(raw_upload_url, original_host, sizeof(original_host));
+    /* 注意：不要用 get_mdns_server_ip() 把 S3 主机改写为 IP 直连——
+     * 该缓存解析的是 CONFIG_SERVER_HOSTNAME（后端 :3000）的接口 IP，
+     * minio (:9000) 可能监听在同一主机的另一个网卡 IP 上，
+     * 直连缓存 IP 会 Connection reset（此前已踩坑）。
+     * 保持主机名由 lwIP/DNS 解析（原上传路径验证可用）。 */
 
-    // URL 改写：mDNS 主机名 → IP（esp_http_client 不支持自动 mDNS）
-    char final_upload_url[512];
-    char override_host[64] = {0};
-#ifdef CONFIG_HTTP_MODE_MDNS
-    char ip[32] = {0};
-    if (get_mdns_server_ip(ip, sizeof(ip)) && original_host[0] != '\0') {
-      // 替换 URL 中的 host 为 IP
-      const char *host_start = strstr(raw_upload_url, "://");
-      if (host_start) {
-        host_start += 3;
-        const char *host_end = strchr(host_start, '/');
-        size_t prefix_len = host_start - raw_upload_url;
-        snprintf(final_upload_url, sizeof(final_upload_url), "%.*s%s%s",
-                 (int)prefix_len, raw_upload_url, ip, host_end);
-        // 覆写 Host 头为原始 mDNS 主机名，匹配 S3 预签名
-        strlcpy(override_host, original_host, sizeof(override_host));
-        ESP_LOGI(TAG, "URL rewritten: %s -> %s (Host: %s)", original_host, ip,
-                 override_host);
-      } else {
-        strlcpy(final_upload_url, raw_upload_url, sizeof(final_upload_url));
-      }
-    } else {
-      strlcpy(final_upload_url, raw_upload_url, sizeof(final_upload_url));
-    }
-#else
-    strlcpy(final_upload_url, raw_upload_url, sizeof(final_upload_url));
-#endif
-
-    // 2. 读取二进制图片文件
+    // 2. 读取二进制图片文件（复用任务启动时预分配的 PSRAM 缓冲）
     FILE *f = fopen(job.path, "rb");
     if (!f) {
       ESP_LOGE(TAG, "File missing: %s", job.path);
@@ -151,22 +111,23 @@ static void uploader_task(void *arg) {
     int size = ftell(f);
     fseek(f, 0, SEEK_SET);
 
-    uint8_t *buf = heap_caps_malloc(size, MALLOC_CAP_SPIRAM);
-    if (!buf) {
-      ESP_LOGE(TAG, "SPIRAM OOM for size: %d", size);
+    if (size <= 0 || (uint32_t)size > s_upload_buf_size) {
+      ESP_LOGE(TAG, "File size %d exceeds upload buffer %u, drop job", size,
+               s_upload_buf_size);
       fclose(f);
+      img_queue_commit();
+      continue;
+    }
+
+    size_t read_bytes = fread(s_upload_buf, 1, size, f);
+    fclose(f);
+    if (read_bytes != (size_t)size) {
+      ESP_LOGE(TAG, "File read incomplete: %d/%d", (int)read_bytes, size);
       goto fail_retry;
     }
-    fread(buf, 1, size, f);
-    fclose(f);
 
-    // 3. PUT 上传 S3（Host 覆写以匹配签名）
-    // const char *host_to_use =
-    //     override_host[0] != '\0' ? override_host : NULL;
-    // bool put_success =
-    //     http_put_binary_with_host(final_upload_url, buf, size, host_to_use);
-    bool put_success = http_put_binary(raw_upload_url, buf, size);
-    heap_caps_free(buf);
+    // 3. PUT 上传 S3（原始预签名 URL，主机名由 esp_http_client/DNS 解析）
+    bool put_success = http_put_binary(raw_upload_url, s_upload_buf, size);
     if (!put_success) {
       goto fail_retry;
     }
@@ -240,9 +201,10 @@ static void uploader_task(void *arg) {
     job.retry_count++;
     img_queue_update_retry(job.retry_count);
     // 自适应退避：前 3 次短间隔，之后长间隔等待网络恢复
-    int backoff = (job.retry_count <= 3) ? RETRY_BACKOFF_MS : RETRY_BACKOFF_LONG_MS;
-    ESP_LOGW(TAG, "Job %s failed, retry %d/%d (backoff %d ms)",
-             job.path, job.retry_count, MAX_RETRY_LIMIT, backoff);
+    int backoff =
+        (job.retry_count <= 3) ? RETRY_BACKOFF_MS : RETRY_BACKOFF_LONG_MS;
+    ESP_LOGW(TAG, "Job %s failed, retry %d/%d (backoff %d ms)", job.path,
+             job.retry_count, MAX_RETRY_LIMIT, backoff);
     vTaskDelay(pdMS_TO_TICKS(backoff));
   }
 }
@@ -251,10 +213,23 @@ void uploader_task_start(void) {
   if (s_uploader_task_handle != NULL)
     return;
 
+  /* 提前堆分配：上传缓冲 + 任务栈，均在任务创建前一次性分配 */
+  s_upload_buf =
+      heap_caps_malloc(UPLOAD_BUF_SIZE, MALLOC_CAP_SPIRAM | MALLOC_CAP_8BIT);
+  if (s_upload_buf == NULL) {
+    ESP_LOGE(TAG, "Failed to allocate PSRAM upload buffer (%d bytes)",
+             UPLOAD_BUF_SIZE);
+    return;
+  }
+  s_upload_buf_size = UPLOAD_BUF_SIZE;
+
   s_uploader_task_stack = (StackType_t *)heap_caps_malloc(
       UPLOADER_STACK_SIZE, MALLOC_CAP_SPIRAM | MALLOC_CAP_8BIT);
   if (s_uploader_task_stack == NULL) {
     ESP_LOGE(TAG, "Failed to allocate PSRAM stack for uploader task");
+    heap_caps_free(s_upload_buf);
+    s_upload_buf = NULL;
+    s_upload_buf_size = 0;
     return;
   }
 
@@ -268,6 +243,9 @@ void uploader_task_start(void) {
     ESP_LOGE(TAG, "Failed to create uploader task");
     heap_caps_free(s_uploader_task_stack);
     s_uploader_task_stack = NULL;
+    heap_caps_free(s_upload_buf);
+    s_upload_buf = NULL;
+    s_upload_buf_size = 0;
     return;
   }
 

@@ -28,9 +28,19 @@ bool chat_window_is_dirty(void);
 
 void chat_window_clear_dirty(void);
 
+/* 清空消息窗口(SYN 新批次开始时调用) */
+void chat_service_clear_window(void);
+
+/* index 0 = 最老, index count-1 = 最新 */
 msg_t *chat_fifo_get(int index);
 
 int chat_fifo_count(void);
+
+/* 窗口中最老一条的 msg_id; 空窗口返回 0xFFFFFFFF */
+uint32_t chat_window_oldest_msg_id(void);
+
+/* WS 重连成功后补发当前聊天模式给服务端 */
+void chat_service_resync_mode(void);
 
 void chat_send_text(const char *text);
 

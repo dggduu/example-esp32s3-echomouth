@@ -25,8 +25,8 @@
 
 #define TAG "MONITOR"
 
-#define MONITOR_STACK_SIZE 4096
-#define VLM_POLL_STACK_SIZE 4096
+#define MONITOR_STACK_SIZE 8192
+#define VLM_POLL_STACK_SIZE 8192
 
 #define INTERVAL_MIN_SEC (60 * 1)
 #define INTERVAL_MAX_SEC (60 * 30)
@@ -37,6 +37,8 @@
 #define INTERVAL_STEP_SEC 15
 #define FACE_POLL_INTERVAL_MS 2000
 #define UPLOAD_CALLBACK_TIMEOUT_MS 30000
+/* 相机冷启动（上电 + esp_camera_init，含失败重试）最长等待时间 */
+#define CAM_POWERUP_TIMEOUT_MS 8000
 
 #define VLM_POLL_INTERVAL_MS 15000
 #define VLM_MAX_RETRIES 8
@@ -76,6 +78,14 @@ static int64_t s_next_wake_time_us = 0;
 static int s_current_interval_sec = INTERVAL_MIN_SEC;
 static int64_t s_face_wait_start_us = 0;
 static volatile bool s_is_paused = false;
+/* 调试页暂停期间触发强制拍照：临时解除暂停执行一轮，完成后自动恢复暂停 */
+static volatile bool s_pause_after_capture = false;
+
+/* 服务端返回的动态检测间隔（秒），由 vlm_poll 任务写入、monitor 任务消费。
+ * -1 表示暂无待应用的值；到达后 monitor 在 SLEEP 阶段应用并重置唤醒计时，
+ * 服务端间隔优先于本地 adjust_interval_by_face_wait（后者仅作兜底）。 */
+static int s_server_interval_sec = -1;
+static SemaphoreHandle_t s_interval_mutex = NULL;
 
 static int adjust_interval_by_face_wait(int64_t wait_sec) {
   int new_interval = s_current_interval_sec;
@@ -93,6 +103,32 @@ static int adjust_interval_by_face_wait(int64_t wait_sec) {
   if (new_interval > INTERVAL_MAX_SEC)
     new_interval = INTERVAL_MAX_SEC;
   return new_interval;
+}
+
+/* vlm_poll 轮询到服务端 completed 时，写入服务端建议的检测间隔（秒） */
+static void apply_server_interval(int interval_sec) {
+  if (interval_sec <= 0 || !s_interval_mutex)
+    return;
+  if (interval_sec < INTERVAL_MIN_SEC)
+    interval_sec = INTERVAL_MIN_SEC;
+  if (interval_sec > INTERVAL_MAX_SEC)
+    interval_sec = INTERVAL_MAX_SEC;
+  xSemaphoreTake(s_interval_mutex, portMAX_DELAY);
+  s_server_interval_sec = interval_sec;
+  xSemaphoreGive(s_interval_mutex);
+  ESP_LOGI(TAG, "Server interval received: %d sec (pending)", interval_sec);
+}
+
+/* monitor 任务消费一次待应用的服务端间隔，返回 -1 表示没有 */
+static int consume_server_interval(void) {
+  int v = -1;
+  if (!s_interval_mutex)
+    return v;
+  xSemaphoreTake(s_interval_mutex, portMAX_DELAY);
+  v = s_server_interval_sec;
+  s_server_interval_sec = -1;
+  xSemaphoreGive(s_interval_mutex);
+  return v;
 }
 
 static void monitor_upload_callback(bool success, const char *tick_id_or_key,
@@ -223,11 +259,23 @@ static bool capture_and_enqueue(void) {
     return false;
   }
 
-  // 2. 等待摄像头回调推帧并完成编码 (超时 3 秒)
+  // 2. 等待相机硬件上电完成（冷启动 + 初始化失败重试可能耗时数秒，
+  //    不能让启动时间吃掉下面的 3 秒帧超时窗口）
+  int64_t powerup_deadline =
+      esp_timer_get_time() + (int64_t)CAM_POWERUP_TIMEOUT_MS * 1000LL;
+  while (!cam_helper_is_hardware_powered()) {
+    if (esp_timer_get_time() > powerup_deadline) {
+      ESP_LOGE(TAG, "Camera hardware power-up timeout");
+      break;
+    }
+    vTaskDelay(pdMS_TO_TICKS(100));
+  }
+
+  // 3. 等待摄像头回调推帧并完成编码 (超时 3 秒，只覆盖相机就绪后的推帧)
   //    此时 face detector 已持有订阅一段时间，sensor AE/AWB 已稳定，不会偏绿
   bool wait_ok = xSemaphoreTake(capture_ctx.sem, pdMS_TO_TICKS(3000)) == pdTRUE;
 
-  // 3. 抓取完成/超时后，立刻取消订阅（让 Camera 自动进入 Standby 低功耗）
+  // 4. 抓取完成/超时后，立刻取消订阅（让 Camera 自动进入 Standby 低功耗）
   cam_helper_unsubscribe(sub_handle);
   vSemaphoreDelete(capture_ctx.sem);
 
@@ -271,7 +319,8 @@ static bool capture_and_enqueue(void) {
     for (int wait = 0; wait < 10; wait++) {
       vTaskDelay(pdMS_TO_TICKS(1000));
       if (img_queue_push(&job)) {
-        ESP_LOGI(TAG, "Queue drained, job enqueued after %d sec wait", wait + 1);
+        ESP_LOGI(TAG, "Queue drained, job enqueued after %d sec wait",
+                 wait + 1);
         return true;
       }
     }
@@ -309,6 +358,12 @@ static void vlm_poll_task_func(void *arg) {
       if (status && status->valuestring) {
         if (strcmp(status->valuestring, "completed") == 0) {
           vlm_ok = true;
+          /* 服务端按 anomalyIntegral 算好的下次检测间隔（秒），
+           * 交给 monitor 状态机在下一轮 SLEEP 中应用 */
+          cJSON *interval_obj = cJSON_GetObjectItem(root, "interval");
+          if (interval_obj && cJSON_IsNumber(interval_obj)) {
+            apply_server_interval(interval_obj->valueint);
+          }
           cJSON_Delete(root);
           break;
         } else if (strcmp(status->valuestring, "pending") != 0) {
@@ -329,6 +384,14 @@ static void monitor_task_func(void *arg) {
   s_current_interval_sec = INTERVAL_MIN_SEC;
 
   while (1) {
+    /* 暂停期间强制拍照执行完毕（回到 SLEEP 或任务结束进入 IDLE）→ 恢复暂停 */
+    if (s_pause_after_capture &&
+        (s_state == MONITOR_STATE_SLEEP || task_manager_get_active_id() == 0)) {
+      s_pause_after_capture = false;
+      s_is_paused = true;
+      ESP_LOGI(TAG, "Forced capture done, monitor re-paused");
+    }
+
     if (s_is_paused) {
       vTaskDelay(pdMS_TO_TICKS(1000));
       continue;
@@ -344,6 +407,7 @@ static void monitor_task_func(void *arg) {
         }
         s_state = MONITOR_STATE_IDLE;
         s_current_interval_sec = INTERVAL_MIN_SEC;
+        (void)consume_server_interval(); // 任务结束，丢弃待应用的服务端间隔
       }
       vTaskDelay(pdMS_TO_TICKS(3000));
       continue;
@@ -359,7 +423,16 @@ static void monitor_task_func(void *arg) {
       ESP_LOGI(TAG, "IDLE->SLEEP, interval=%d sec", s_current_interval_sec);
       break;
 
-    case MONITOR_STATE_SLEEP:
+    case MONITOR_STATE_SLEEP: {
+      /* 服务端动态间隔到达 → 覆盖本地间隔并重新计时 */
+      int pending = consume_server_interval();
+      if (pending > 0) {
+        s_current_interval_sec = pending;
+        s_next_wake_time_us =
+            esp_timer_get_time() + (int64_t)s_current_interval_sec * 1000000LL;
+        ESP_LOGI(TAG, "Server interval applied, next wake in %d sec",
+                 s_current_interval_sec);
+      }
       if (now_us >= s_next_wake_time_us) {
         ESP_LOGI(TAG, "Interval reached -> WAIT_FACE");
         s_state = MONITOR_STATE_WAIT_FACE;
@@ -369,13 +442,14 @@ static void monitor_task_func(void *arg) {
         vTaskDelay(pdMS_TO_TICKS((remain_ms > 1000) ? 1000 : remain_ms));
       }
       break;
+    }
 
     case MONITOR_STATE_WAIT_FACE:
       if (!face_detector_helper_is_running()) {
         face_detector_helper_start_continuous();
-        // start_continuous 内部已清空旧缓存；首帧到达前 get_results 返回 count=0
-        // 这也是 camera sensor 的预热同步点：face detector 订阅了摄像头，
-        // 等它处理完首帧，sensor 的 AE/AWB 也已稳定
+        // start_continuous 内部已清空旧缓存；首帧到达前 get_results 返回
+        // count=0 这也是 camera sensor 的预热同步点：face detector
+        // 订阅了摄像头， 等它处理完首帧，sensor 的 AE/AWB 也已稳定
         s_face_wait_start_us = esp_timer_get_time();
       }
 
@@ -450,8 +524,11 @@ static void monitor_task_func(void *arg) {
 
 void monitor_task_force_capture(bool skip_face) {
   if (s_is_paused) {
-    ESP_LOGW(TAG, "Monitor is paused, cannot force capture");
-    return;
+    /* 暂停期间（调试界面）强制上传：临时解除暂停执行一轮，
+     * monitor 任务在拍照完成回到 SLEEP/IDLE 后自动重新暂停 */
+    ESP_LOGI(TAG, "Monitor paused, temporarily unpausing for forced capture");
+    s_pause_after_capture = true;
+    s_is_paused = false;
   }
 
   xSemaphoreTake(s_monitor_mutex, portMAX_DELAY);
@@ -461,10 +538,12 @@ void monitor_task_force_capture(bool skip_face) {
   int prev_interval = s_current_interval_sec;
 
   if (skip_face) {
-    ESP_LOGI(TAG, "Force capture (skip face) -> CAPTURING, prev_state=%d", prev_state);
+    ESP_LOGI(TAG, "Force capture (skip face) -> CAPTURING, prev_state=%d",
+             prev_state);
     s_state = MONITOR_STATE_CAPTURING;
   } else {
-    ESP_LOGI(TAG, "Force capture (with face) -> WAIT_FACE, prev_state=%d", prev_state);
+    ESP_LOGI(TAG, "Force capture (with face) -> WAIT_FACE, prev_state=%d",
+             prev_state);
     // Stop face detector if running so it starts fresh
     if (face_detector_helper_is_running()) {
       face_detector_helper_stop_continuous();
@@ -477,6 +556,7 @@ void monitor_task_force_capture(bool skip_face) {
   s_current_interval_sec = INTERVAL_MIN_SEC;
 
   xSemaphoreGive(s_monitor_mutex);
+  (void)consume_server_interval(); // 强制拍照走本地调度，丢弃待应用的服务端间隔
   (void)prev_state;
   (void)prev_wake;
   (void)prev_interval;
@@ -487,6 +567,8 @@ void monitor_task_start(void) {
     s_upload_done_sem = xSemaphoreCreateBinary();
   if (!s_monitor_mutex)
     s_monitor_mutex = xSemaphoreCreateMutex();
+  if (!s_interval_mutex)
+    s_interval_mutex = xSemaphoreCreateMutex();
   if (!s_vlm_result_queue)
     s_vlm_result_queue = xQueueCreate(5, sizeof(vlm_result_msg_t));
 
@@ -522,6 +604,7 @@ void monitor_task_reset_timer(void) {
     s_next_wake_time_us = esp_timer_get_time() + 1000000LL;
     s_current_interval_sec = INTERVAL_MIN_SEC;
     xSemaphoreGive(s_monitor_mutex);
+    (void)consume_server_interval(); // 外部重置调度，丢弃待应用的服务端间隔
     ESP_LOGI(TAG, "Timer reset with 1s delay before next wake");
   }
 }
@@ -533,6 +616,7 @@ void monitor_task_pause(void) {
 
 void monitor_task_resume(void) {
   ESP_LOGI(TAG, "Monitor task resume requested");
+  s_pause_after_capture = false; /* 用户主动恢复，取消待执行的重新暂停 */
   monitor_task_reset_timer();
   s_is_paused = false;
 }

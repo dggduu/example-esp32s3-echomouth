@@ -32,6 +32,18 @@ static void add_message_to_window(uint32_t msg_id, uint32_t timestamp,
 
   xSemaphoreTake(s_fifo_mutex, portMAX_DELAY);
 
+  // 0. 按 msg_id 去重：服务端重连/整窗批次可能重复下发同一条消息
+  if (msg_id != 0) {
+    for (int i = 0; i < s_window_count; i++) {
+      int pos = (s_window_head - 1 - i + CHAT_WINDOW_SIZE) % CHAT_WINDOW_SIZE;
+      if (s_window[pos].msg_id == msg_id) {
+        xSemaphoreGive(s_fifo_mutex);
+        ESP_LOGI(TAG, "Dup msg_id=%lu ignored", msg_id);
+        return;
+      }
+    }
+  }
+
   // 1. 填充 FIFO
   msg_t *slot = &s_window[s_window_head];
   slot->msg_id = msg_id;
@@ -49,6 +61,16 @@ static void add_message_to_window(uint32_t msg_id, uint32_t timestamp,
 
   xSemaphoreGive(s_fifo_mutex);
   ESP_LOGI(TAG, "Window updated & dirty flag set: %s", text);
+}
+
+void chat_service_clear_window(void) {
+  xSemaphoreTake(s_fifo_mutex, portMAX_DELAY);
+  memset(s_window, 0, sizeof(s_window));
+  s_window_count = 0;
+  s_window_head = 0;
+  s_dirty = true;
+  xSemaphoreGive(s_fifo_mutex);
+  ESP_LOGI(TAG, "Window cleared");
 }
 
 static void handle_data_packet(protocol_packet_t *pkt) {
@@ -107,8 +129,13 @@ void chat_service_handle_packet(protocol_packet_t *pkt) {
     }
     break;
   case TYPE_SYN:
+    /* SYN 表示一个新批次开始(live 窗口/历史批次),
+       旧窗口内容作废, 避免与批次内消息混在一起 */
+    ESP_LOGI(TAG, "SYN epoch=%d, clearing window", pkt->epoch);
+    chat_service_clear_window();
+    break;
   case TYPE_END:
-    ESP_LOGI(TAG, "Control packet %d, epoch=%d", pkt->type, pkt->epoch);
+    ESP_LOGI(TAG, "END epoch=%d", pkt->epoch);
     break;
   case TYPE_REASONING:
     if (s_reasoning_cb) {
@@ -140,15 +167,31 @@ void chat_window_clear_dirty(void) {
   xSemaphoreGive(s_fifo_mutex);
 }
 
+/* index 0 = 最老, index count-1 = 最新(聊天惯例:顶部旧、底部新) */
 msg_t *chat_fifo_get(int index) {
   msg_t *msg = NULL;
   xSemaphoreTake(s_fifo_mutex, portMAX_DELAY);
   if (index < s_window_count) {
-    int pos = (s_window_head - 1 - index + CHAT_WINDOW_SIZE) % CHAT_WINDOW_SIZE;
+    int pos =
+        (s_window_head - s_window_count + index + CHAT_WINDOW_SIZE) %
+        CHAT_WINDOW_SIZE;
     msg = &s_window[pos];
   }
   xSemaphoreGive(s_fifo_mutex);
   return msg;
+}
+
+/* 窗口中最老一条的 msg_id;窗口为空时返回 0xFFFFFFFF(服务端"查全部"哨兵) */
+uint32_t chat_window_oldest_msg_id(void) {
+  uint32_t id = 0xFFFFFFFF;
+  xSemaphoreTake(s_fifo_mutex, portMAX_DELAY);
+  if (s_window_count > 0) {
+    int pos =
+        (s_window_head - s_window_count + CHAT_WINDOW_SIZE) % CHAT_WINDOW_SIZE;
+    id = s_window[pos].msg_id;
+  }
+  xSemaphoreGive(s_fifo_mutex);
+  return id;
 }
 
 int chat_fifo_count(void) {
@@ -184,6 +227,27 @@ void chat_exit_chat(void) {
   if (len > 0)
     net_ws_send(buf, len);
   ESP_LOGI(TAG, "Exit to HOME mode");
+}
+
+/* WebSocket 重连成功后调用: 服务端 open 时会把 deviceState 重置为 home,
+   必须把当前设备模式补发过去, 否则服务端只会推 NOTIFY 而不推 DATA */
+void chat_service_resync_mode(void) {
+  device_mode_t mode = protocol_get_mode();
+  uint8_t buf[32];
+  int len = -1;
+
+  if (mode == DEVICE_MODE_CHAT_LIVE) {
+    len = encode_mode_switch(buf, sizeof(buf), 0x01);
+    ESP_LOGI(TAG, "Resync: re-send LIVE mode");
+  } else if (mode == DEVICE_MODE_CHAT_HISTORY) {
+    /* 历史会话无法无缝恢复(锚点已丢), 重连后直接回到实时模式 */
+    protocol_set_mode(DEVICE_MODE_CHAT_LIVE);
+    len = encode_mode_switch(buf, sizeof(buf), 0x01);
+    ESP_LOGI(TAG, "Resync: history -> LIVE mode");
+  }
+
+  if (len > 0)
+    net_ws_send(buf, len);
 }
 
 void chat_send_text(const char *text) {

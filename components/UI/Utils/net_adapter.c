@@ -78,6 +78,20 @@ static void default_status_callback(net_status_t status, const char *msg) {
 }
 
 static void notify_status(net_status_t status, const char *msg) {
+  /* 网络状态始终同步给图片上传队列 — 不依赖用户回调,
+     否则聊天页注册回调后 img_queue 收不到断线/重连事件 */
+  switch (status) {
+  case NET_STATUS_CONNECTED:
+    img_queue_set_network_up(true);
+    break;
+  case NET_STATUS_DISCONNECTED:
+  case NET_STATUS_RECONNECTING:
+    img_queue_set_network_up(false);
+    break;
+  default:
+    break;
+  }
+
   if (g_user_status_cb) {
     g_user_status_cb(status, msg);
   } else {
@@ -104,6 +118,11 @@ static void ws_event_handler(void *handler_args, esp_event_base_t base,
     xSemaphoreGive(g_ws_mutex);
 
     notify_status(NET_STATUS_CONNECTED, "已连接到服务器");
+
+    /* 服务端 open 时会把 deviceState 重置为 home,
+       必须在连接建立后把设备当前模式补发过去,
+       否则 (初次进入页面时 WS 未就绪 / 断线重连) 模式会永久错位 */
+    chat_service_resync_mode();
     break;
 
   case WEBSOCKET_EVENT_DISCONNECTED:

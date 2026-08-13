@@ -373,8 +373,8 @@ static void on_btn_click(lv_event_t *e) {
     power_manager_report_activity();
     gs_toast_show("NORMAL mode", GS_TOAST_SUCCESS);
   } else if (strcmp(action, "eco") == 0) {
-    power_manager_report_activity();
-    gs_toast_show("ECO countdown restarted", GS_TOAST_INFO);
+    power_manager_enter_dimming();
+    gs_toast_show("ECO: 屏幕已关闭", GS_TOAST_INFO);
   } else if (strcmp(action, "deep") == 0) {
     power_manager_enter_deep_sleep();
   } else if (strcmp(action, "force_cap_noface") == 0) {

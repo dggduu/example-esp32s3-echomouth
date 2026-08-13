@@ -32,6 +32,10 @@
 #define HISTORY_DIR_OLDER 0x00
 #define HISTORY_DIR_NEWER 0x01
 
+/* 单条消息最大字节数（UTF-8）— 对齐 msg_t.text[256] / reasoning_content[256]
+ * 缓冲区，与服务端 MAX_MESSAGE_BYTES 同值 */
+#define MAX_MESSAGE_BYTES 254
+
 /* 设备模式 */
 typedef enum {
   DEVICE_MODE_HOME,

@@ -433,11 +433,22 @@ esp_err_t bsp_lcd_rgb_test(esp_lcd_panel_handle_t panel) {
   return ESP_OK;
 }
 
+/* esp_lvgl_port 的 taskLVGL 空闲时最长休眠 task_max_sleep_ms（默认 500ms），
+ * 且该版本端口没有注册 timer resume 回调 —— lv_timer_create（lv_async_call、
+ * 动画、toast 倒计时等）插入新定时器后 taskLVGL 不会被唤醒，
+ * 事件只能等休眠超时或触摸才被处理（弹窗"触发但不显示/不下移"）。
+ * 注册 resume 回调：任何定时器创建/恢复都立即唤醒 taskLVGL。 */
+static void lvgl_timer_resume_cb(void *data) {
+  (void)data;
+  lvgl_port_task_wake(LVGL_PORT_EVENT_USER, NULL);
+}
+
 esp_err_t bsp_lvgl_init(esp_lcd_panel_handle_t panel,
                         esp_lcd_touch_handle_t touch) {
   lvgl_port_cfg_t lvgl_cfg = ESP_LVGL_PORT_INIT_CONFIG();
   lvgl_cfg.task_stack = 16384;
   ESP_ERROR_CHECK(lvgl_port_init(&lvgl_cfg));
+  lv_timer_handler_set_resume_cb(lvgl_timer_resume_cb, NULL);
 
   const lvgl_port_display_cfg_t disp_cfg = {
       .io_handle = s_io_handle,

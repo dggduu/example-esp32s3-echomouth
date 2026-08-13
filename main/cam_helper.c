@@ -1,4 +1,5 @@
 #include "cam_helper.h"
+#include "esp_heap_caps.h"
 #include "esp_log.h"
 #include "esp_timer.h"
 #include "freertos/FreeRTOS.h"
@@ -11,6 +12,9 @@
 static const char *TAG = "CAM_HELPER";
 
 #define MAX_SUBSCRIBERS 4
+/* 相机上电连续失败上限：内部 DMA 内存不足（cam_dma_config 分配描述符失败）
+ * 时重试不会变好，达到上限后停止重试，等订阅清空后再重新尝试 */
+#define MAX_POWERUP_RETRIES 5
 
 typedef struct {
   bool in_use;
@@ -26,6 +30,7 @@ static TaskHandle_t s_capture_task_handle = NULL;
 
 static subscriber_t s_subscribers[MAX_SUBSCRIBERS];
 static uint32_t s_sub_count = 0;
+static int s_powerup_fail_count = 0;
 
 /* 内部私有：上电 */
 static esp_err_t internal_power_up_hardware(void) {
@@ -76,6 +81,8 @@ static void cam_capture_task(void *pvParameters) {
       if (s_hw_powered) {
         internal_power_down_hardware();
       }
+      // 订阅清空后重置失败计数，下次订阅重新尝试上电
+      s_powerup_fail_count = 0;
       xSemaphoreGive(s_mutex);
 
       // 被唤醒前每 500ms 巡检一次
@@ -86,7 +93,40 @@ static void cam_capture_task(void *pvParameters) {
     // 有订阅者，确保硬件上电
     xSemaphoreTake(s_mutex, portMAX_DELAY);
     if (!s_hw_powered) {
+      // 连续失败达到上限：不再盲目重试，打印堆诊断后等订阅清空
+      if (s_powerup_fail_count >= MAX_POWERUP_RETRIES) {
+        if (s_powerup_fail_count == MAX_POWERUP_RETRIES) {
+          s_powerup_fail_count++;
+          ESP_LOGE(TAG,
+                   "Camera power-up exhausted %d retries, "
+                   "giving up until next subscribe",
+                   MAX_POWERUP_RETRIES);
+        }
+        xSemaphoreGive(s_mutex);
+        vTaskDelay(pdMS_TO_TICKS(500));
+        continue;
+      }
+
       if (internal_power_up_hardware() != ESP_OK) {
+        s_powerup_fail_count++;
+        // 首次失败时打印完整堆诊断：区分"内部 RAM 耗尽"与"碎片化"
+        // （cam_dma_config 分配 480B DMA 描述符失败即与此相关）
+        if (s_powerup_fail_count == 1) {
+          ESP_LOGE(TAG,
+                   "Camera power-up failed (%d/%d): "
+                   "internal free=%u largest=%u | DMA free=%u largest=%u | "
+                   "PSRAM free=%u largest=%u",
+                   s_powerup_fail_count, MAX_POWERUP_RETRIES,
+                   heap_caps_get_free_size(MALLOC_CAP_INTERNAL),
+                   heap_caps_get_largest_free_block(MALLOC_CAP_INTERNAL),
+                   heap_caps_get_free_size(MALLOC_CAP_DMA),
+                   heap_caps_get_largest_free_block(MALLOC_CAP_DMA),
+                   heap_caps_get_free_size(MALLOC_CAP_SPIRAM),
+                   heap_caps_get_largest_free_block(MALLOC_CAP_SPIRAM));
+        } else {
+          ESP_LOGE(TAG, "Camera power-up failed (%d/%d)", s_powerup_fail_count,
+                   MAX_POWERUP_RETRIES);
+        }
         xSemaphoreGive(s_mutex);
         vTaskDelay(pdMS_TO_TICKS(200));
         continue;
@@ -125,7 +165,7 @@ esp_err_t cam_helper_init(const cam_helper_config_t *config) {
   s_sub_count = 0;
   s_hw_powered = false;
 
-  xTaskCreatePinnedToCore(cam_capture_task, "cam_cap", 6144, NULL, 4,
+  xTaskCreatePinnedToCore(cam_capture_task, "cam_cap", 12288, NULL, 4,
                           &s_capture_task_handle, 1);
 
   s_helper_inited = true;

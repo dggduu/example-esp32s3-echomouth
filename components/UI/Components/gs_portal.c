@@ -1,10 +1,14 @@
 #include "gs_portal.h"
 #include "easing.h"
+#include "esp_log.h"
+#include "esp_lvgl_port.h"
 #include "freertos/FreeRTOS.h"
 #include "freertos/task.h"
 #include "lvgl.h"
 #include <stdlib.h>
 #include <string.h>
+
+static const char *TAG = "PORTAL";
 
 /* ========== 1. 字体声明 ========== */
 LV_FONT_DECLARE(chili_cn);
@@ -29,7 +33,12 @@ typedef struct {
 
 #define TOAST_ANIM_TIME_MS 300
 #define TOAST_TOP_TARGET_Y 20 // 针对 360 圆形屏优化顶部边距
-#define TOAST_TOP_START_Y -50
+/* 等待 LVGL 锁的预算：启动阶段 splash 渲染 / SPI 大区域刷新可能超过 100ms */
+#define LVGL_LOCK_TIMEOUT_MS 250
+/* 起始 Y 不能完全移出屏幕：lv_inv_area 会丢弃完全在屏幕外的失效区域，
+ * 若动画因任何原因被延迟/卡住，卡在屏外的 toast 将完全不可见且不会被重绘
+ * （"触发但没有下移" 且毫无痕迹）。-30 保证卡片底部始终有一截在屏内。 */
+#define TOAST_TOP_START_Y -30
 
 /* ========== 内部函数前置声明 ========== */
 static void _toast_click_cb(lv_event_t *e);
@@ -392,6 +401,11 @@ static void _async_dismiss_cb(void *user_data) {
       if (card) {
         lv_anim_del(card, NULL);
 
+        /* 卡片即将销毁：其 click 事件 user_data 指向 g_toast_cfg，
+         * 稍后 _free_toast_cfg 会释放该配置 —— 退场动画 300ms 内点击卡片
+         * 会命中已释放内存（UAF）。先摘除点击回调，封死该窗口。 */
+        lv_obj_remove_event_cb(card, _toast_click_cb);
+
         // 1. 上浮退场动画
         lv_anim_t a_pos;
         lv_anim_init(&a_pos);
@@ -402,43 +416,18 @@ static void _async_dismiss_cb(void *user_data) {
         lv_anim_set_path_cb(&a_pos, anim_path_quadratic_ease_in);
         lv_anim_start(&a_pos);
 
-        // 2. 渐隐动画（注意：作用在 root 上，动画结束彻底销毁 root 节点）
+        /* 2. 渐隐动画：var 直接绑 root（root 的 opa 作用于整棵子树），
+         * 动画结束由 ready 回调删除 root。 */
         lv_anim_t a_opa;
         lv_anim_init(&a_opa);
-        lv_anim_set_var(&a_opa, card);
+        lv_anim_set_var(&a_opa, toast_to_dismiss);
         lv_anim_set_values(&a_opa, lv_obj_get_style_opa(card, 0),
                            LV_OPA_TRANSP);
         lv_anim_set_time(&a_opa, TOAST_ANIM_TIME_MS);
         lv_anim_set_exec_cb(&a_opa, anim_set_opa_cb);
         lv_anim_set_path_cb(&a_opa, anim_path_quadratic_ease_in);
-
-        // 绑定整个 root 节点作为 var 传给 ready 回调
-        lv_anim_set_var(&a_opa, toast_to_dismiss);
-        lv_anim_set_exec_cb(&a_opa, anim_set_opa_cb);
-        // 使用 card 进行 opa 渐隐
-        lv_anim_set_var(&a_opa, card);
         lv_anim_set_ready_cb(&a_opa, _toast_exit_anim_ready_cb);
-
-        // 关键动作：将 root 放在 user_data 或属性中防野指针，这里可以直接对
-        // card 挂载 ready
-        a_opa.var = toast_to_dismiss; // 执行完毕清理根节点
-        a_opa.exec_cb = NULL;         // 根节点无 exec，手动挂载 card
-
-        // 分离动画：card 负责透明度变化，root 负责在动画结束时 delete
-        lv_anim_t a_opa_card;
-        lv_anim_init(&a_opa_card);
-        lv_anim_set_var(&a_opa_card, card);
-        lv_anim_set_values(&a_opa_card, lv_obj_get_style_opa(card, 0),
-                           LV_OPA_TRANSP);
-        lv_anim_set_time(&a_opa_card, TOAST_ANIM_TIME_MS);
-        lv_anim_set_exec_cb(&a_opa_card, anim_set_opa_cb);
-        lv_anim_set_path_cb(&a_opa_card, anim_path_quadratic_ease_in);
-        lv_anim_set_ready_cb(&a_opa_card, _toast_exit_anim_ready_cb);
-
-        // 将 root 句柄挂在 a_opa_card 的 var 上，确保 Ready 回调里能正确
-        // delete(root)
-        a_opa_card.var = toast_to_dismiss;
-        lv_anim_start(&a_opa_card);
+        lv_anim_start(&a_opa);
 
       } else {
         lv_obj_delete(toast_to_dismiss);
@@ -451,6 +440,11 @@ static void _async_dismiss_cb(void *user_data) {
 }
 
 /* ========== 公开 API ========== */
+/* lv_async_call 本质是 lv_timer_create —— 无锁向 LVGL 全局定时器链表头
+ * 插入一次性定时器。外部任务（net_rx、上传任务、websocket 事件等）直接
+ * 调用时若与 taskLVGL 的 lv_timer_handler 并发迭代/删除同一链表，定时器
+ * 可能丢失或链表损坏（弹窗"触发但不显示"）。必须在 LVGL 锁保护下插入；
+ * taskLVGL 内部（动画/事件回调）调用时递归锁可重入，安全。 */
 void gs_portal_toast_show(gs_toast_config_t cfg) {
   portal_create_params_t *params = malloc(sizeof(portal_create_params_t));
   if (!params)
@@ -463,11 +457,32 @@ void gs_portal_toast_show(gs_toast_config_t cfg) {
     params->toast_cfg.msg = strdup(cfg.msg);
   }
 
-  lv_async_call(_async_create_cb, params);
+  if (!lvgl_port_lock(pdMS_TO_TICKS(LVGL_LOCK_TIMEOUT_MS))) {
+    ESP_LOGE(TAG, "toast show: LVGL lock timeout, drop");
+    /* 注意：不能用 _free_toast_cfg(&params->toast_cfg) —— 它会最后
+     * free(cfg) 自身，而 toast_cfg 只是 params 内部的 union 成员（非独立
+     * malloc 基址），free 内部指针会被判为堆损坏直接 panic。
+     * 这里只释放 strdup 的字段，再 free(params) 基址。 */
+    if (params->toast_cfg.msg)
+      free((void *)params->toast_cfg.msg);
+    free(params);
+    return;
+  }
+  if (lv_async_call(_async_create_cb, params) != LV_RESULT_OK) {
+    if (params->toast_cfg.msg)
+      free((void *)params->toast_cfg.msg);
+    free(params);
+  }
+  lvgl_port_unlock();
 }
 
 void gs_portal_toast_dismiss(void) {
+  if (!lvgl_port_lock(pdMS_TO_TICKS(LVGL_LOCK_TIMEOUT_MS))) {
+    ESP_LOGE(TAG, "toast dismiss: LVGL lock timeout");
+    return;
+  }
   lv_async_call(_async_dismiss_cb, (void *)0);
+  lvgl_port_unlock();
 }
 
 void gs_portal_alert_show(gs_alert_config_t cfg) {
@@ -483,11 +498,33 @@ void gs_portal_alert_show(gs_alert_config_t cfg) {
   if (cfg.msg)
     params->alert_cfg.msg = strdup(cfg.msg);
 
-  lv_async_call(_async_create_cb, params);
+  if (!lvgl_port_lock(pdMS_TO_TICKS(LVGL_LOCK_TIMEOUT_MS))) {
+    ESP_LOGE(TAG, "alert show: LVGL lock timeout, drop");
+    /* 同 toast：alert_cfg 是 params 内部成员，不能整个 _free_alert_cfg */
+    if (params->alert_cfg.title)
+      free((void *)params->alert_cfg.title);
+    if (params->alert_cfg.msg)
+      free((void *)params->alert_cfg.msg);
+    free(params);
+    return;
+  }
+  if (lv_async_call(_async_create_cb, params) != LV_RESULT_OK) {
+    if (params->alert_cfg.title)
+      free((void *)params->alert_cfg.title);
+    if (params->alert_cfg.msg)
+      free((void *)params->alert_cfg.msg);
+    free(params);
+  }
+  lvgl_port_unlock();
 }
 
 void gs_portal_alert_dismiss(void) {
+  if (!lvgl_port_lock(pdMS_TO_TICKS(LVGL_LOCK_TIMEOUT_MS))) {
+    ESP_LOGE(TAG, "alert dismiss: LVGL lock timeout");
+    return;
+  }
   lv_async_call(_async_dismiss_cb, (void *)1);
+  lvgl_port_unlock();
 }
 
 void gs_toast_show(const char *msg, gs_toast_type_t type) {

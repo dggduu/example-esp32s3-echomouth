@@ -133,12 +133,19 @@ static void send_cb(lv_event_t *e) {
   lv_textarea_set_text(s_textarea, "");
 }
 
+/* 上翻按钮: 请求更早的历史消息 (以窗口中最老一条为锚点) */
 static void page_up_cb(lv_event_t *e) {
-  lv_obj_scroll_by(s_chat_viewport, 0, 100, LV_ANIM_ON);
+  uint32_t oldest = chat_window_oldest_msg_id();
+  chat_enter_history(oldest, HISTORY_DIR_OLDER);
 }
 
+/* 下翻按钮: 历史模式下回到实时聊天; 实时模式下向下滚动 */
 static void page_down_cb(lv_event_t *e) {
-  lv_obj_scroll_by(s_chat_viewport, 0, -100, LV_ANIM_ON);
+  if (protocol_get_mode() == DEVICE_MODE_CHAT_HISTORY) {
+    chat_enter_live();
+  } else {
+    lv_obj_scroll_by(s_chat_viewport, 0, -100, LV_ANIM_ON);
+  }
 }
 
 static void chat_exit_cb(lv_event_t *e) { gs_nav_pop_async(); }
