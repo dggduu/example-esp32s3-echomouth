@@ -78,6 +78,9 @@ static void show_loading(bool show) {
   if (lvgl_port_lock(0)) {
     if (show) {
       if (!s_spinner && s_ctx.main_cont) {
+        /* spinner 阶段临时切回 CENTER 保持居中显示 */
+        lv_obj_set_flex_align(s_ctx.main_cont, LV_FLEX_ALIGN_CENTER,
+                              LV_FLEX_ALIGN_CENTER, LV_FLEX_ALIGN_CENTER);
         s_spinner = ui_circle_create_spinner(s_ctx.main_cont);
       }
     } else {
@@ -124,6 +127,12 @@ static void render_list_async_cb(void *arg) {
   }
 
   page_todo_ctx_t *ctx = &s_ctx;
+
+  /* 数据渲染阶段恢复主轴 START（spinner 时是 CENTER），
+   * 保证内容溢出时第一个元素位于容器顶部、可正常滚动到 */
+  lv_obj_set_flex_align(ctx->main_cont, LV_FLEX_ALIGN_START,
+                        LV_FLEX_ALIGN_CENTER, LV_FLEX_ALIGN_CENTER);
+
   lv_obj_clean(ctx->main_cont);
 
   /* 空数据处理 (Empty State) */
@@ -411,8 +420,12 @@ static lv_obj_t *page_todo_render(lv_obj_t *parent, void *ctx_ptr) {
   lv_obj_set_flex_grow(ctx->main_cont, 1);
   lv_obj_set_flex_flow(ctx->main_cont, LV_FLEX_FLOW_COLUMN);
 
-  // 居中布局，确保 Spinner 或加载卡片完美对齐
-  lv_obj_set_flex_align(ctx->main_cont, LV_FLEX_ALIGN_CENTER,
+  /* 主轴用 START（默认列表语义）：
+   * 若用 CENTER，内容高于容器时 place_content 会把卡片起始位推到
+   * 容器顶边之上（负坐标），而 LVGL 拖动滚动在顶部边界处强制 diff=0，
+   * 第一个元素永远滚不出来（lv_indev_scroll.c elastic_diff）。
+   * 加载中 spinner 需要居中，见 show_loading()。 */
+  lv_obj_set_flex_align(ctx->main_cont, LV_FLEX_ALIGN_START,
                         LV_FLEX_ALIGN_CENTER, LV_FLEX_ALIGN_CENTER);
 
   lv_obj_set_style_bg_opa(ctx->main_cont, LV_OPA_TRANSP, 0);
