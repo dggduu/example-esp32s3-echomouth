@@ -13,8 +13,6 @@
 #include "gs_nav.h"
 #include "gs_portal.h"
 #include "lvgl.h"
-#include "monitor_mamager.h"
-#include "power_manager.h"
 #include "misc/lv_color.h"
 #include "monitor_mamager.h"
 #include "power_manager.h"
@@ -373,8 +371,8 @@ static void on_btn_click(lv_event_t *e) {
     power_manager_report_activity();
     gs_toast_show("NORMAL mode", GS_TOAST_SUCCESS);
   } else if (strcmp(action, "eco") == 0) {
-    power_manager_enter_dimming();
-    gs_toast_show("ECO: 屏幕已关闭", GS_TOAST_INFO);
+    power_manager_report_activity();
+    gs_toast_show("ECO countdown restarted", GS_TOAST_INFO);
   } else if (strcmp(action, "deep") == 0) {
     power_manager_enter_deep_sleep();
   } else if (strcmp(action, "force_cap_noface") == 0) {
@@ -492,8 +490,10 @@ static lv_obj_t *debug_render(lv_obj_t *parent, void *ctx) {
   make_debug_btn(cont, LV_SYMBOL_IMAGE, "摄像头测试", "cam");
   make_debug_btn(cont, LV_SYMBOL_DIRECTORY, "文件管理", "files");
   make_debug_btn(cont, LV_SYMBOL_POWER, "电源模式测试", "power");
-  make_debug_btn(cont, LV_SYMBOL_UPLOAD, "强制上传 (跳过人脸)", "force_cap_noface");
-  make_debug_btn(cont, LV_SYMBOL_IMAGE, "强制上传 (含人脸检测)", "force_cap_face");
+  make_debug_btn(cont, LV_SYMBOL_UPLOAD, "强制上传 (跳过人脸)",
+                 "force_cap_noface");
+  make_debug_btn(cont, LV_SYMBOL_IMAGE, "强制上传 (含人脸检测)",
+                 "force_cap_face");
   make_debug_btn(cont, LV_SYMBOL_CLOSE, "退出调试", "exit");
 
   lv_obj_t *info = lv_label_create(cont);

@@ -13,8 +13,6 @@
 #include "esp_pm.h"
 #include "esp_sleep.h"
 #include "freertos/FreeRTOS.h"
-#include "freertos/idf_additions.h"
-#include "freertos/projdefs.h"
 #include "freertos/semphr.h"
 #include "freertos/timers.h"
 #include "lvgl.h"
@@ -49,10 +47,6 @@ static SemaphoreHandle_t s_mutex = NULL;
 
 /* 引用外部全局触摸句柄（用于进入 Deep Sleep 前注销驱动） */
 extern esp_lcd_touch_handle_t touch_handle;
-/* 当前这次触摸用于触发 DIMMING，必须等到释放后才能再次作为唤醒输入 */
-static bool s_ignore_input_until_release = false;
-static bool s_wakeup_enabled = true;
-static bool s_wait_touch_release = false;
 
 #if CONFIG_PM_ENABLE
 static esp_pm_lock_handle_t s_pm_lock = NULL;
@@ -99,38 +93,17 @@ static void cpu_freq_high(void) {
 #endif
 }
 
-// static void enter_dimming(void) {
-//   if (s_state == PWR_STATE_DIMMING)
-//     return;
-
-//   ESP_LOGI(TAG, "State -> DIMMING (SLPIN + Backlight OFF, CPU Low Freq)");
-//   bsp_lcd_sleep(true);
-//   bsp_lcd_backlight_set(false);
-//   cpu_freq_low();
-//   if (!audio_helper_is_running()) {
-//     bsp_pa_power_off();
-//   }
-//   s_state = PWR_STATE_DIMMING;
-// }
-
 static void enter_dimming(void) {
   if (s_state == PWR_STATE_DIMMING)
     return;
 
   ESP_LOGI(TAG, "State -> DIMMING (SLPIN + Backlight OFF, CPU Low Freq)");
-
-  /* 当前触摸用于进入 DIMMING，不允许它再次唤醒 */
-  s_wakeup_enabled = false;
-  s_wait_touch_release = true;
-
   bsp_lcd_sleep(true);
   bsp_lcd_backlight_set(false);
   cpu_freq_low();
-
   if (!audio_helper_is_running()) {
     bsp_pa_power_off();
   }
-
   s_state = PWR_STATE_DIMMING;
 }
 
@@ -146,83 +119,31 @@ static void back_to_normal(void) {
 }
 
 /* 1 秒低频轮询，通过 LVGL 空闲检测实现 DIMMING 与 Deep Sleep 超时管理 */
-// static void pwr_check_timer_cb(TimerHandle_t timer) {
-//   pwr_lock();
-
-//   uint32_t inactive_ms = lv_display_get_inactive_time(NULL);
-
-//   if (inactive_ms < DIM_TIMEOUT_MS) {
-//     if (s_state != PWR_STATE_NORMAL) {
-//       back_to_normal();
-//     }
-//   } else if (inactive_ms >= DIM_TIMEOUT_MS &&
-//              inactive_ms < (DIM_TIMEOUT_MS + DEEP_SLEEP_TIMEOUT_MS)) {
-//     if (should_block_sleep()) {
-//       lv_display_trigger_activity(NULL);
-//       back_to_normal();
-//     } else if (s_state == PWR_STATE_NORMAL) {
-//       enter_dimming();
-//     }
-//   } else if (inactive_ms >= (DIM_TIMEOUT_MS + DEEP_SLEEP_TIMEOUT_MS)) {
-//     if (should_block_sleep()) {
-//       lv_display_trigger_activity(NULL);
-//       back_to_normal();
-//     } else {
-//       s_state = PWR_STATE_DEEP_SLEEP;
-//       pwr_unlock();
-//       power_manager_enter_deep_sleep();
-//       return;
-//     }
-//   }
-
-//   pwr_unlock();
-// }
-
 static void pwr_check_timer_cb(TimerHandle_t timer) {
   pwr_lock();
 
   uint32_t inactive_ms = lv_display_get_inactive_time(NULL);
 
   if (inactive_ms < DIM_TIMEOUT_MS) {
-
-    /*
-     * 不要在这里 back_to_normal()。
-     *
-     * DIMMING -> NORMAL 应该由真正的用户 activity
-     * 触发，而不是由 LVGL inactive time 反向触发。
-     */
+    if (s_state != PWR_STATE_NORMAL) {
+      back_to_normal();
+    }
   } else if (inactive_ms >= DIM_TIMEOUT_MS &&
              inactive_ms < (DIM_TIMEOUT_MS + DEEP_SLEEP_TIMEOUT_MS)) {
-
     if (should_block_sleep()) {
-      /*
-       * 有任务/摄像头活动。
-       *
-       * 不要 back_to_normal()，否则会导致 DIMMING
-       * 被后台状态强制唤醒。
-       *
-       * 如果需要重新开始 inactivity 计时，可以保留。
-       */
       lv_display_trigger_activity(NULL);
-
+      back_to_normal();
     } else if (s_state == PWR_STATE_NORMAL) {
-
       enter_dimming();
     }
   } else if (inactive_ms >= (DIM_TIMEOUT_MS + DEEP_SLEEP_TIMEOUT_MS)) {
-
     if (should_block_sleep()) {
-
       lv_display_trigger_activity(NULL);
-
+      back_to_normal();
     } else {
-
       s_state = PWR_STATE_DEEP_SLEEP;
-
       pwr_unlock();
-
       power_manager_enter_deep_sleep();
-
       return;
     }
   }
@@ -253,26 +174,10 @@ esp_err_t power_manager_init(void) {
 }
 
 void power_manager_report_activity(void) {
-  ESP_LOGW(TAG, "Activity reported: state=%d", s_state);
-
   lv_display_trigger_activity(NULL);
-
   pwr_lock();
-
-  if (s_state != PWR_STATE_DEEP_SLEEP) {
-    back_to_normal();
-  }
-
+  back_to_normal();
   pwr_unlock();
-}
-
-/* 立即进入 DIMMING（熄屏：LCD sleep + 背光关闭 + CPU 低频）。
- * 触摸或再次 report_activity 可唤醒；DEEP_SLEEP 计时不受影响。 */
-void power_manager_enter_dimming(void) {
-  pwr_lock();
-  enter_dimming();
-  pwr_unlock();
-  ESP_LOGI(TAG, "Manual dimming requested (screen off)");
 }
 
 void power_manager_enter_deep_sleep(void) {
@@ -326,28 +231,3 @@ bool power_manager_is_deep_sleep_wakeup(void) {
 bool power_manager_is_screen_off(void) { return s_state >= PWR_STATE_DIMMING; }
 
 bool power_manager_is_sleeping(void) { return s_state == PWR_STATE_DEEP_SLEEP; }
-
-bool power_manager_handle_input(bool pressed) {
-  bool wake = false;
-
-  pwr_lock();
-
-  if (s_wait_touch_release) {
-    if (!pressed) {
-      s_wait_touch_release = false;
-      s_wakeup_enabled = true;
-
-      ESP_LOGI(TAG, "Touch released, wakeup enabled");
-    }
-
-    pwr_unlock();
-    return false;
-  }
-
-  if (s_wakeup_enabled && pressed) {
-    wake = true;
-  }
-
-  pwr_unlock();
-  return wake;
-}

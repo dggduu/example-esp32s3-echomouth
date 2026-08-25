@@ -12,7 +12,6 @@ esp_err_t power_manager_init(void);
 void power_manager_report_activity(void);
 void power_manager_enter_sleep(void);
 void power_manager_exit_sleep(void);
-void power_manager_enter_dimming(void);
 bool power_manager_is_screen_off(void);
 bool power_manager_is_sleeping(void);
 
@@ -28,7 +27,7 @@ void power_manager_enter_deep_sleep(void);
  *        Call this early in app_main to decide resume vs fresh boot.
  */
 bool power_manager_is_deep_sleep_wakeup(void);
-bool power_manager_handle_input(bool pressed);
+
 #ifdef __cplusplus
 }
 #endif

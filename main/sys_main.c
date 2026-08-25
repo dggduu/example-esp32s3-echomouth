@@ -158,24 +158,9 @@ static void toast_async_cb(void *arg) {
 }
 
 static void show_toast_async(const char *msg) {
-  if (!msg)
-    return;
-  char *dup = strdup(msg);
-  if (!dup)
-    return;
-
-  /* lv_async_call 会在无锁状态下向 LVGL 全局定时器链表头插入一次性定时器。
-   * 本回调由 net_rx 任务（prio 6）触发，与 taskLVGL 的 lv_timer_handler
-   * 并发操作同一链表 → 定时器可能丢失，弹窗"触发但不显示"。
-   * 必须在 LVGL 锁保护下插入；拿不到锁则丢弃（弹提示只损失一次提示，
-   * 不冒链表损坏的风险）。 */
-  if (!lvgl_port_lock(pdMS_TO_TICKS(100))) {
-    ESP_LOGE(TAG, "show_toast_async: LVGL lock timeout, drop");
-    free(dup);
-    return;
+  if (msg) {
+    lv_async_call(toast_async_cb, strdup(msg));
   }
-  lv_async_call(toast_async_cb, dup);
-  lvgl_port_unlock();
 }
 
 static void on_reasoning_received(const char *msg) { show_toast_async(msg); }
@@ -196,47 +181,21 @@ static void touch_indev_event_cb(lv_event_t *e) {
 }
 
 /* 导航 loop 调度任务 */
-// static void nav_loop_task(void *param) {
-//   while (1) {
-//     if (lvgl_port_lock(pdMS_TO_TICKS(50))) {
-//       gs_nav_loop();
-
-//       lv_indev_t *indev = lv_indev_get_act();
-//       if (indev && lv_indev_get_state(indev) == LV_INDEV_STATE_PR) {
-//         power_manager_report_activity();
-//       }
-//       lvgl_port_unlock();
-//     }
-//     vTaskDelay(pdMS_TO_TICKS(20));
-//   }
-// }
 static void nav_loop_task(void *param) {
   while (1) {
     if (lvgl_port_lock(pdMS_TO_TICKS(50))) {
-
       gs_nav_loop();
 
       lv_indev_t *indev = lv_indev_get_act();
-
-      if (indev) {
-        lv_indev_state_t state = lv_indev_get_state(indev);
-
-        if (state == LV_INDEV_STATE_PR) {
-          if (power_manager_handle_input(true)) {
-
-            power_manager_report_activity();
-          }
-        } else {
-          power_manager_handle_input(false);
-        }
+      if (indev && lv_indev_get_state(indev) == LV_INDEV_STATE_PR) {
+        power_manager_report_activity();
       }
-
       lvgl_port_unlock();
     }
-
     vTaskDelay(pdMS_TO_TICKS(20));
   }
 }
+
 /*---------------------------------------------------------------
  * 设备密钥生成与全局网络初始化
  *--------------------------------------------------------------*/
