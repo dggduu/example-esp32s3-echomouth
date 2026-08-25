@@ -28,13 +28,15 @@
 #define MONITOR_STACK_SIZE 8192
 #define VLM_POLL_STACK_SIZE 8192
 
-#define INTERVAL_MIN_SEC (60 * 1)
-#define INTERVAL_MAX_SEC (60 * 30)
+/* 演示模式: 服务端推理返回的检测间隔为 8-15s, 本地也收敛到同一窗口,
+ * 否则 apply_server_interval 会把 8-15s 又钳回 ≥60s, 动态间隔逻辑不生效 */
+#define INTERVAL_MIN_SEC 8
+#define INTERVAL_MAX_SEC 15
 
-#define FACE_WAIT_FAST_SEC 20
-#define FACE_WAIT_SLOW_SEC 60
-#define FACE_WAIT_TIMEOUT_SEC 30
-#define INTERVAL_STEP_SEC 15
+#define FACE_WAIT_FAST_SEC 8
+#define FACE_WAIT_SLOW_SEC 15
+#define FACE_WAIT_TIMEOUT_SEC 10
+#define INTERVAL_STEP_SEC 3
 #define FACE_POLL_INTERVAL_MS 2000
 #define UPLOAD_CALLBACK_TIMEOUT_MS 30000
 /* 相机冷启动（上电 + esp_camera_init，含失败重试）最长等待时间 */
